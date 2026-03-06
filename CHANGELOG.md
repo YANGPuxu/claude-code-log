@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.1.0] - 2026-03-06
+
+### Changed
+
+- **Fix WebSearch and WebFetch rendering in agent transcripts (#98)**
+- **Fix fold-bar colors and System Hook alignment (#89)**
+- **Add WebFetch tool renderer (#87)**
+- **Merge pull request #83 from daaain/dev/websearch-tool-renderer**
+- **Update some outdated docs + VS Code insists on these settings (#86)**
+- **Fix double tab opening when clicking links in TUI MarkdownViewer**
+- **Simplify WebSearch parser and improve rendering**
+- **Use structured toolUseResult for WebSearch parsing**
+- **Add analysis content support to WebSearch output**
+- **Add documentation for implementing tool renderers**
+- **Add WebSearch HTML and Markdown formatters**
+- **Add WebSearch tool models and factory parser**
+- **Fix snapshot + make sure snapshot order is stable**
+- **Improve CSS layout to be responsive for mobile small screens (#77)**
+- **Update pyright to 1.1.408 (#82)**
+- **Support subagents directory structure (Claude Code 2.1.2+) (#80)**
+
+
 ## [1.0.0] - 2026-01-22
 
 BREAKING CHANGE: cache is now using a SQLite database instead of JSON files!
