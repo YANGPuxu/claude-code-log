@@ -36,6 +36,7 @@ from ..models import (
     EditOutput,
     ExitPlanModeInput,
     ExitPlanModeOutput,
+    GrepInput,
     MultiEditInput,
     ReadInput,
     ReadOutput,
@@ -212,6 +213,22 @@ def format_exitplanmode_result(content: str) -> str:
 
     # For errors or other cases, return as-is
     return content
+
+
+# -- Grep Tool ----------------------------------------------------------------
+
+
+def format_grep_input(grep_input: GrepInput) -> str:
+    """Format Grep tool use content as generic params table, minus pattern.
+
+    The pattern is already shown in the title, so we render remaining
+    parameters (path, glob, type, output_mode, -A, -B, etc.) using the
+    generic params table. Returns empty if pattern was the only parameter.
+    """
+    params = grep_input.model_dump(exclude={"pattern"}, exclude_none=True)
+    if not params:
+        return ""
+    return render_params_table(params)
 
 
 # -- WebSearch Tool -----------------------------------------------------------
@@ -833,6 +850,7 @@ __all__ = [
     "format_multiedit_input",
     "format_bash_input",
     "format_task_input",
+    "format_grep_input",
     "format_websearch_input",
     "format_webfetch_input",
     # Tool output formatters (called by HtmlRenderer.format_{OutputClass})
