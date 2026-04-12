@@ -324,10 +324,16 @@ class TestCLIMainCommand:
         assert "--clear-cache" in result.output
         assert "--open-browser" in result.output
 
-    def test_no_arguments_uses_default_or_cwd(self, monkeypatch: pytest.MonkeyPatch):
+    def test_no_arguments_uses_default_or_cwd(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
         """Running without arguments attempts to find projects."""
+        # Isolate from real ~/.claude/projects (which can be very large)
+        monkeypatch.setattr(
+            "claude_code_log.cli.get_default_projects_dir", lambda: tmp_path
+        )
+        monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "test.db"))
         runner = CliRunner()
-        # Mock to avoid actual file system operations
         result = runner.invoke(main, [])
         # Should either succeed or fail gracefully (no crash)
         assert result.exit_code in (0, 1)

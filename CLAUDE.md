@@ -47,6 +47,8 @@ claude-code-log --from-date "last week"
 
 See @CONTRIBUTING.md for detailed development setup, testing, architecture, and release process.
 
+**Before pushing, always remind the user to run `just ci`.**
+
 ### Claude-Specific Testing Tips
 
 **Always use `-n auto` for parallel test execution:**
