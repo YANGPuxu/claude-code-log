@@ -838,8 +838,29 @@ class MarkdownRenderer(Renderer):
         # Heading with title (skip if empty)
         title = self.title_content(msg)
         if title:
-            heading_level = min(level, 6)  # Markdown max is h6
-            parts.append(f"{'#' * heading_level} {title}")
+            # Track the *rendered* heading category, not `msg_type`: a
+            # paired `ThinkingMessage` renders an "🤖 Assistant: ..."
+            # title, so a following standalone Assistant reuses that
+            # category and should be compacted even though the raw
+            # `message_type` strings differ ("thinking" vs "assistant").
+            # The category is everything before the first ":" in the
+            # rendered title (e.g. "🤖 Assistant", "🤷 User").
+            heading_category = title.split(":", 1)[0].strip()
+
+            # Compact mode: suppress heading for consecutive same-category
+            # messages. Reset tracking on session boundaries.
+            if is_session_header:
+                self._last_heading_category = None
+            suppress_heading = (
+                self.compact
+                and not is_session_header
+                and heading_category == self._last_heading_category
+            )
+            self._last_heading_category = heading_category
+
+            if not suppress_heading:
+                heading_level = min(level, 6)  # Markdown max is h6
+                parts.append(f"{'#' * heading_level} {title}")
 
             # Format content (if not already output above)
             if content:
@@ -873,13 +894,14 @@ class MarkdownRenderer(Renderer):
         """Generate Markdown from transcript messages."""
         self._output_dir = output_dir
         self._image_counter = 0
+        self._last_heading_category: Optional[str] = None
 
         if not title:
             title = "Claude Transcript"
 
         # Get root messages (tree), session navigation, and rendering context
         root_messages, session_nav, ctx = generate_template_messages(
-            messages, session_tree=session_tree
+            messages, session_tree=session_tree, detail=self.detail
         )
         self._ctx = ctx
 

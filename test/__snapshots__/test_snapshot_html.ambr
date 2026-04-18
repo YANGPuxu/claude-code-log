@@ -445,9 +445,11 @@
       color: var(--text-secondary, #495057);
   }
   
-  /* Fork point and branch nav items — lightweight text links, not cards */
+  /* Fork point, branch, and compaction-point nav items
+   * — lightweight text links, not cards */
   .session-fork-point,
-  .session-branch {
+  .session-branch,
+  .session-compaction-point {
       padding-left: 8px;
   }
   
@@ -459,8 +461,13 @@
       border-left: 2px dashed #666;
   }
   
+  .session-compaction-point {
+      border-left: 2px solid #888;
+  }
+  
   .fork-link,
-  .branch-link {
+  .branch-link,
+  .compaction-link {
       display: block;
       text-decoration: none;
       color: #6c757d;
@@ -469,7 +476,8 @@
   }
   
   .fork-link:hover,
-  .branch-link:hover {
+  .branch-link:hover,
+  .compaction-link:hover {
       color: var(--text-secondary);
   }
   /* Project card styles for index page */
@@ -3497,9 +3505,11 @@
       color: var(--text-secondary, #495057);
   }
   
-  /* Fork point and branch nav items — lightweight text links, not cards */
+  /* Fork point, branch, and compaction-point nav items
+   * — lightweight text links, not cards */
   .session-fork-point,
-  .session-branch {
+  .session-branch,
+  .session-compaction-point {
       padding-left: 8px;
   }
   
@@ -3511,8 +3521,13 @@
       border-left: 2px dashed #666;
   }
   
+  .session-compaction-point {
+      border-left: 2px solid #888;
+  }
+  
   .fork-link,
-  .branch-link {
+  .branch-link,
+  .compaction-link {
       display: block;
       text-decoration: none;
       color: #6c757d;
@@ -3521,7 +3536,8 @@
   }
   
   .fork-link:hover,
-  .branch-link:hover {
+  .branch-link:hover,
+  .compaction-link:hover {
       color: var(--text-secondary);
   }
   /* Filter toolbar and controls */
@@ -6431,6 +6447,47 @@
   
               // Apply initial fold state
               setInitialFoldState();
+  
+              // Unfold any folded ancestors so an anchor target (e.g. a tool_use
+              // jumped to from the session index) is actually visible. Ancestor
+              // message_ids appear as `d-X` classes on the target, outer-first.
+              function unfoldAncestorsOf(hash) {
+                  if (!hash || !hash.startsWith('#msg-')) return;
+                  const target = document.getElementById(hash.slice(1));
+                  if (!target) return;
+                  const ancestorIds = Array.from(target.classList).filter(
+                      cls => cls.startsWith('d-')
+                  );
+                  ancestorIds.forEach(id => {
+                      const ancestorMsg = document.querySelector(
+                          `.message[data-message-id="${id}"]`
+                      );
+                      if (!ancestorMsg) return;
+                      const foldBar = ancestorMsg.querySelector('.fold-bar');
+                      if (!foldBar) return;
+                      // Single-level parents only render `.fold-one-level.full-width`
+                      // — no `.fold-all-levels` exists — so anchors under those
+                      // folded ancestors stay hidden unless we fall back.
+                      const foldControl =
+                          foldBar.querySelector('.fold-all-levels') ||
+                          foldBar.querySelector('.fold-one-level.full-width');
+                      if (foldControl && foldControl.classList.contains('folded')) {
+                          foldControl.click();
+                      }
+                  });
+                  // Re-trigger the browser's scroll-to-anchor now that
+                  // the target is no longer display:none.
+                  if (target.scrollIntoView) {
+                      target.scrollIntoView({block: 'start'});
+                  }
+              }
+              window.addEventListener(
+                  'hashchange',
+                  () => unfoldAncestorsOf(window.location.hash)
+              );
+              if (window.location.hash) {
+                  unfoldAncestorsOf(window.location.hash);
+              }
           });
       </script>
       <!-- Search functionality script -->
@@ -8658,9 +8715,11 @@
       color: var(--text-secondary, #495057);
   }
   
-  /* Fork point and branch nav items — lightweight text links, not cards */
+  /* Fork point, branch, and compaction-point nav items
+   * — lightweight text links, not cards */
   .session-fork-point,
-  .session-branch {
+  .session-branch,
+  .session-compaction-point {
       padding-left: 8px;
   }
   
@@ -8672,8 +8731,13 @@
       border-left: 2px dashed #666;
   }
   
+  .session-compaction-point {
+      border-left: 2px solid #888;
+  }
+  
   .fork-link,
-  .branch-link {
+  .branch-link,
+  .compaction-link {
       display: block;
       text-decoration: none;
       color: #6c757d;
@@ -8682,7 +8746,8 @@
   }
   
   .fork-link:hover,
-  .branch-link:hover {
+  .branch-link:hover,
+  .compaction-link:hover {
       color: var(--text-secondary);
   }
   /* Filter toolbar and controls */
@@ -11691,6 +11756,47 @@
   
               // Apply initial fold state
               setInitialFoldState();
+  
+              // Unfold any folded ancestors so an anchor target (e.g. a tool_use
+              // jumped to from the session index) is actually visible. Ancestor
+              // message_ids appear as `d-X` classes on the target, outer-first.
+              function unfoldAncestorsOf(hash) {
+                  if (!hash || !hash.startsWith('#msg-')) return;
+                  const target = document.getElementById(hash.slice(1));
+                  if (!target) return;
+                  const ancestorIds = Array.from(target.classList).filter(
+                      cls => cls.startsWith('d-')
+                  );
+                  ancestorIds.forEach(id => {
+                      const ancestorMsg = document.querySelector(
+                          `.message[data-message-id="${id}"]`
+                      );
+                      if (!ancestorMsg) return;
+                      const foldBar = ancestorMsg.querySelector('.fold-bar');
+                      if (!foldBar) return;
+                      // Single-level parents only render `.fold-one-level.full-width`
+                      // — no `.fold-all-levels` exists — so anchors under those
+                      // folded ancestors stay hidden unless we fall back.
+                      const foldControl =
+                          foldBar.querySelector('.fold-all-levels') ||
+                          foldBar.querySelector('.fold-one-level.full-width');
+                      if (foldControl && foldControl.classList.contains('folded')) {
+                          foldControl.click();
+                      }
+                  });
+                  // Re-trigger the browser's scroll-to-anchor now that
+                  // the target is no longer display:none.
+                  if (target.scrollIntoView) {
+                      target.scrollIntoView({block: 'start'});
+                  }
+              }
+              window.addEventListener(
+                  'hashchange',
+                  () => unfoldAncestorsOf(window.location.hash)
+              );
+              if (window.location.hash) {
+                  unfoldAncestorsOf(window.location.hash);
+              }
           });
       </script>
       <!-- Search functionality script -->
@@ -13918,9 +14024,11 @@
       color: var(--text-secondary, #495057);
   }
   
-  /* Fork point and branch nav items — lightweight text links, not cards */
+  /* Fork point, branch, and compaction-point nav items
+   * — lightweight text links, not cards */
   .session-fork-point,
-  .session-branch {
+  .session-branch,
+  .session-compaction-point {
       padding-left: 8px;
   }
   
@@ -13932,8 +14040,13 @@
       border-left: 2px dashed #666;
   }
   
+  .session-compaction-point {
+      border-left: 2px solid #888;
+  }
+  
   .fork-link,
-  .branch-link {
+  .branch-link,
+  .compaction-link {
       display: block;
       text-decoration: none;
       color: #6c757d;
@@ -13942,7 +14055,8 @@
   }
   
   .fork-link:hover,
-  .branch-link:hover {
+  .branch-link:hover,
+  .compaction-link:hover {
       color: var(--text-secondary);
   }
   /* Filter toolbar and controls */
@@ -17008,6 +17122,47 @@
   
               // Apply initial fold state
               setInitialFoldState();
+  
+              // Unfold any folded ancestors so an anchor target (e.g. a tool_use
+              // jumped to from the session index) is actually visible. Ancestor
+              // message_ids appear as `d-X` classes on the target, outer-first.
+              function unfoldAncestorsOf(hash) {
+                  if (!hash || !hash.startsWith('#msg-')) return;
+                  const target = document.getElementById(hash.slice(1));
+                  if (!target) return;
+                  const ancestorIds = Array.from(target.classList).filter(
+                      cls => cls.startsWith('d-')
+                  );
+                  ancestorIds.forEach(id => {
+                      const ancestorMsg = document.querySelector(
+                          `.message[data-message-id="${id}"]`
+                      );
+                      if (!ancestorMsg) return;
+                      const foldBar = ancestorMsg.querySelector('.fold-bar');
+                      if (!foldBar) return;
+                      // Single-level parents only render `.fold-one-level.full-width`
+                      // — no `.fold-all-levels` exists — so anchors under those
+                      // folded ancestors stay hidden unless we fall back.
+                      const foldControl =
+                          foldBar.querySelector('.fold-all-levels') ||
+                          foldBar.querySelector('.fold-one-level.full-width');
+                      if (foldControl && foldControl.classList.contains('folded')) {
+                          foldControl.click();
+                      }
+                  });
+                  // Re-trigger the browser's scroll-to-anchor now that
+                  // the target is no longer display:none.
+                  if (target.scrollIntoView) {
+                      target.scrollIntoView({block: 'start'});
+                  }
+              }
+              window.addEventListener(
+                  'hashchange',
+                  () => unfoldAncestorsOf(window.location.hash)
+              );
+              if (window.location.hash) {
+                  unfoldAncestorsOf(window.location.hash);
+              }
           });
       </script>
       <!-- Search functionality script -->
@@ -19235,9 +19390,11 @@
       color: var(--text-secondary, #495057);
   }
   
-  /* Fork point and branch nav items — lightweight text links, not cards */
+  /* Fork point, branch, and compaction-point nav items
+   * — lightweight text links, not cards */
   .session-fork-point,
-  .session-branch {
+  .session-branch,
+  .session-compaction-point {
       padding-left: 8px;
   }
   
@@ -19249,8 +19406,13 @@
       border-left: 2px dashed #666;
   }
   
+  .session-compaction-point {
+      border-left: 2px solid #888;
+  }
+  
   .fork-link,
-  .branch-link {
+  .branch-link,
+  .compaction-link {
       display: block;
       text-decoration: none;
       color: #6c757d;
@@ -19259,7 +19421,8 @@
   }
   
   .fork-link:hover,
-  .branch-link:hover {
+  .branch-link:hover,
+  .compaction-link:hover {
       color: var(--text-secondary);
   }
   /* Filter toolbar and controls */
@@ -22169,6 +22332,47 @@
   
               // Apply initial fold state
               setInitialFoldState();
+  
+              // Unfold any folded ancestors so an anchor target (e.g. a tool_use
+              // jumped to from the session index) is actually visible. Ancestor
+              // message_ids appear as `d-X` classes on the target, outer-first.
+              function unfoldAncestorsOf(hash) {
+                  if (!hash || !hash.startsWith('#msg-')) return;
+                  const target = document.getElementById(hash.slice(1));
+                  if (!target) return;
+                  const ancestorIds = Array.from(target.classList).filter(
+                      cls => cls.startsWith('d-')
+                  );
+                  ancestorIds.forEach(id => {
+                      const ancestorMsg = document.querySelector(
+                          `.message[data-message-id="${id}"]`
+                      );
+                      if (!ancestorMsg) return;
+                      const foldBar = ancestorMsg.querySelector('.fold-bar');
+                      if (!foldBar) return;
+                      // Single-level parents only render `.fold-one-level.full-width`
+                      // — no `.fold-all-levels` exists — so anchors under those
+                      // folded ancestors stay hidden unless we fall back.
+                      const foldControl =
+                          foldBar.querySelector('.fold-all-levels') ||
+                          foldBar.querySelector('.fold-one-level.full-width');
+                      if (foldControl && foldControl.classList.contains('folded')) {
+                          foldControl.click();
+                      }
+                  });
+                  // Re-trigger the browser's scroll-to-anchor now that
+                  // the target is no longer display:none.
+                  if (target.scrollIntoView) {
+                      target.scrollIntoView({block: 'start'});
+                  }
+              }
+              window.addEventListener(
+                  'hashchange',
+                  () => unfoldAncestorsOf(window.location.hash)
+              );
+              if (window.location.hash) {
+                  unfoldAncestorsOf(window.location.hash);
+              }
           });
       </script>
       <!-- Search functionality script -->

@@ -16,6 +16,8 @@ from .models import (
     QueueOperationTranscriptEntry,
     UserTranscriptEntry,
     AssistantTranscriptEntry,
+    PassthroughTranscriptEntry,
+    SystemTranscriptEntry,
 )
 
 logger = logging.getLogger(__name__)
@@ -231,6 +233,56 @@ def _is_subtree_dead_end(
     return True
 
 
+def _is_structural_subtree(
+    uuid: str,
+    session_uuids: set[str],
+    nodes: dict[str, MessageNode],
+    max_depth: int = 20,
+) -> bool:
+    """Check if the subtree below `uuid` contains only structural entries.
+
+    A subtree is 'structural' if the root's descendants (within the session)
+    contain no UserTranscriptEntry or AssistantTranscriptEntry — only
+    passthrough nodes (attachments, permission-mode), system-info hook
+    summaries, etc.  Used to detect side-branches that look live at the DAG
+    level but carry no conversational content (e.g. a user(tool_result)
+    followed by just a hook_success attachment).
+
+    The root itself is not inspected — only its descendants — because this
+    check is used to decide whether a child of a fork point represents
+    continuing conversation.
+    """
+    stack: list[tuple[str, int]] = [(c, 1) for c in nodes[uuid].children_uuids]
+    seen: set[str] = set()
+    while stack:
+        current, depth = stack.pop()
+        if current in seen or current not in session_uuids:
+            continue
+        seen.add(current)
+        entry = nodes[current].entry
+        if isinstance(entry, (UserTranscriptEntry, AssistantTranscriptEntry)):
+            return False  # Found conversational content
+        if depth >= max_depth:
+            return False  # Too deep to tell — be conservative
+        for c in nodes[current].children_uuids:
+            stack.append((c, depth + 1))
+    return True
+
+
+# System subtypes that produce parentless entries by design (fresh chains
+# after `/compact`, orphan `/memory` or `/config` invocations at session
+# start). Multi-root sessions built from only these are expected, not
+# noteworthy.
+_EXPECTED_ROOT_SYSTEM_SUBTYPES = frozenset({"compact_boundary", "local_command"})
+
+
+def _is_expected_root_type(entry: TranscriptEntry) -> bool:
+    """Whether a multi-root entry is one of Claude Code's expected patterns."""
+    if isinstance(entry, SystemTranscriptEntry):
+        return entry.subtype in _EXPECTED_ROOT_SYSTEM_SUBTYPES
+    return False
+
+
 def _stitch_tool_results(
     children: list[str],
     session_uuids: set[str],
@@ -242,9 +294,10 @@ def _stitch_tool_results(
     records both the next tool_use and the tool_result as children of the
     current tool_use entry, creating a false fork.  Two variants:
 
-    Variant 1 — User child is immediate dead end:
-        A(tool_use) → U(tool_result)   [dead-end side-branch]
-                    → A(next tool_use) [main chain continues]
+    Variant 1 — User child's subtree is structural (no conversation):
+        A(tool_use) → U(tool_result)          [structural side-branch]
+                         → attachment(hook)
+                    → A(next tool_use) → ...  [main chain continues]
 
     Variant 2 — User child continues, Assistant subtree dead-ends:
         A(tool_use) → U(tool_result) → A(response) → ...  [main chain]
@@ -252,7 +305,8 @@ def _stitch_tool_results(
 
     Returns a stitched ordering placing dead-end children first, then
     the single continuation child.  Returns None if the pattern doesn't
-    match.
+    match.  Callers should treat `result[:-1]` as dead-end nodes whose
+    subtree descendants are skipped, and `result[-1]` as the continuation.
     """
     # Separate into user (tool_result) and assistant (continuation) children
     user_children = [
@@ -265,20 +319,21 @@ def _stitch_tool_results(
     if not user_children or not assistant_children:
         return None  # Not the tool_result pattern
 
-    # Check variant 1: all user children are immediate dead ends
-    user_all_dead = all(
-        not any(c in session_uuids for c in nodes[uc].children_uuids)
-        for uc in user_children
+    # Variant 1: user children carry only structural content (attachments,
+    # hook summaries), the assistant sibling is the real continuation.
+    # The earlier "no immediate same-session child" check missed cases
+    # where the tool_result has a hook_success attachment leaf.
+    user_all_structural = all(
+        _is_structural_subtree(uc, session_uuids, nodes) for uc in user_children
     )
 
-    if user_all_dead:
-        # Variant 1: user dead ends + single assistant continuation
+    if user_all_structural:
         if len(assistant_children) != 1:
             return None
         user_children.sort(key=lambda c: nodes[c].timestamp)
         return user_children + assistant_children
 
-    # Check variant 2: assistant subtrees are dead ends,
+    # Variant 2: assistant subtrees are dead ends,
     # exactly one user child continues
     user_with_cont = [
         uc
@@ -353,6 +408,37 @@ def _walk_session_with_forks(
                 # Multiple same-session children. Distinguish real forks
                 # from artifacts (see dev-docs/dag.md caveats).
                 same_session_children.sort(key=lambda c: nodes[c].timestamp)
+
+                # Collapse passthrough side-branches. A child is
+                # "structural" when it is a PassthroughTranscriptEntry
+                # whose subtree has no user/assistant descendants — e.g. a
+                # `progress` entry, a `hook_success` attachment, or a chain
+                # of them. When at most one non-structural child remains,
+                # the chain continues through that child (or terminates if
+                # none remain); the structural children are stitched in
+                # chronologically as dead-end side entries.
+                #
+                # This catches both the all-passthrough case (e.g. two
+                # hook attachments on the same parent) and the common
+                # mixed case (a `<progress>` sibling of a real user
+                # message), preventing spurious 1-branch forks.
+                structural_kids = [
+                    c
+                    for c in same_session_children
+                    if isinstance(nodes[c].entry, PassthroughTranscriptEntry)
+                    and _is_structural_subtree(c, session_uuids, nodes)
+                ]
+                non_structural = [
+                    c for c in same_session_children if c not in structural_kids
+                ]
+                if structural_kids and len(non_structural) <= 1:
+                    for pk in sorted(structural_kids, key=lambda c: nodes[c].timestamp):
+                        if is_branch:
+                            nodes[pk].session_id = line_id
+                        _collect_descendants(pk, session_uuids, nodes, skipped)
+                        chain.append(pk)
+                    current = nodes[non_structural[0]] if non_structural else None
+                    continue
 
                 stitched = _stitch_tool_results(
                     same_session_children, session_uuids, nodes
@@ -451,12 +537,30 @@ def extract_session_dag_lines(
         # Sort roots by timestamp (earliest first = primary root)
         roots.sort(key=lambda n: n.timestamp)
         if len(roots) > 1:
-            logger.warning(
-                "Session %s: %d roots found, walking all from earliest (%s)",
-                session_id,
-                len(roots),
-                roots[0].uuid,
-            )
+            # Roots that arise from expected Claude Code mechanisms —
+            # `/compact` writes a compact_boundary system entry with no
+            # parentUuid; early `local_command` entries like `/memory`
+            # sometimes land as orphans too. Warn only when an unexpected
+            # root shows up (e.g. an orphan user/assistant that hints at a
+            # missing parent); otherwise log at debug level.
+            unexpected = [n for n in roots if not _is_expected_root_type(n.entry)]
+            if unexpected:
+                logger.warning(
+                    "Session %s: %d roots found (%d unexpected), "
+                    "walking all from earliest (%s)",
+                    session_id,
+                    len(roots),
+                    len(unexpected),
+                    roots[0].uuid,
+                )
+            else:
+                logger.debug(
+                    "Session %s: %d expected roots (compact_boundary / "
+                    "local_command), walking all from earliest (%s)",
+                    session_id,
+                    len(roots),
+                    roots[0].uuid,
+                )
 
         # Walk from ALL roots to maximize coverage (orphan-promoted roots
         # create disconnected subtrees that must each be walked)

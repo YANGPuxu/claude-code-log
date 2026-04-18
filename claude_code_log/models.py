@@ -45,6 +45,18 @@ class MessageType(str, Enum):
     SYSTEM_ERROR = "system-error"
 
 
+class DetailLevel(str, Enum):
+    """Output detail level controlling which message types are included.
+
+    Levels form a hierarchy: full > high > low > minimal.
+    """
+
+    FULL = "full"  # Everything
+    HIGH = "high"  # Detailed but cleaned (no system/hook noise)
+    LOW = "low"  # Interaction-focused + key signals
+    MINIMAL = "minimal"  # User + assistant messages only
+
+
 # =============================================================================
 # JSONL Content Models (Pydantic)
 # =============================================================================
@@ -198,6 +210,10 @@ class SystemTranscriptEntry(BaseTranscriptEntry):
     hookErrors: Optional[list[str]] = None
     hookInfos: Optional[list[dict[str, Any]]] = None
     preventedContinuation: Optional[bool] = None
+    # Compact boundary fields (for subtype="compact_boundary"); primarily
+    # `preTokens`, `trigger`, `postTokens`, `durationMs`. Read at factory
+    # time into SystemMessage.compact_pre_tokens / compact_trigger.
+    compactMetadata: Optional[dict[str, Any]] = None
 
 
 class QueueOperationTranscriptEntry(BaseModel):
@@ -345,6 +361,11 @@ class SystemMessage(MessageContent):
 
     level: str  # "info", "warning", "error"
     text: str  # Raw text content (may contain ANSI codes)
+    # Populated only for subtype="compact_boundary" entries: the token
+    # count before compaction and what triggered it ("manual"/"auto").
+    # Surfaced in the nav landmark label for /compact points.
+    compact_pre_tokens: Optional[int] = None
+    compact_trigger: Optional[str] = None
 
     @property
     def message_type(self) -> str:

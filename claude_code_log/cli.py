@@ -514,6 +514,23 @@ def _clear_output_files(input_path: Path, all_projects: bool, file_ext: str) -> 
     help="Export a single session by ID (full ID or prefix). Project path is optional — looks up the session globally via cache.",
 )
 @click.option(
+    "--detail",
+    type=click.Choice(["full", "high", "low", "minimal"], case_sensitive=False),
+    default="full",
+    help=(
+        "Detail level for output. "
+        "full: everything; "
+        "high: detailed but cleaned (no system/hook noise); "
+        "low: interaction-focused + key signals; "
+        "minimal: user + assistant messages only."
+    ),
+)
+@click.option(
+    "--compact",
+    is_flag=True,
+    help="Merge consecutive same-type headings in Markdown output.",
+)
+@click.option(
     "--debug",
     is_flag=True,
     default=False,
@@ -536,6 +553,8 @@ def main(
     image_export_mode: Optional[str],
     page_size: int,
     session_id: Optional[str],
+    detail: str,
+    compact: bool,
     debug: bool,
 ) -> None:
     """Convert Claude transcript JSONL files to HTML or Markdown.
@@ -544,6 +563,10 @@ def main(
     """
     # Configure logging to show warnings and above
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
+
+    from .models import DetailLevel
+
+    detail_level = DetailLevel(detail.lower())
 
     try:
         # Handle TUI mode
@@ -702,6 +725,8 @@ def main(
                 output,
                 not no_cache,
                 image_export_mode,
+                detail=detail_level,
+                compact=compact,
             )
             click.echo(f"Successfully exported session to {output_path}")
             if open_browser:
@@ -745,6 +770,8 @@ def main(
                 output_format,
                 image_export_mode,
                 page_size=page_size,
+                detail=detail_level,
+                compact=compact,
             )
 
             # Count processed projects
@@ -797,6 +824,8 @@ def main(
             not no_cache,
             image_export_mode=image_export_mode,
             page_size=page_size,
+            detail=detail_level,
+            compact=compact,
         )
         if input_path.is_file():
             click.echo(f"Successfully converted {input_path} to {output_path}")

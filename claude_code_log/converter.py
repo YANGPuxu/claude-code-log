@@ -32,6 +32,7 @@ from .parser import parse_timestamp
 from .factories import create_transcript_entry
 from .models import (
     BaseTranscriptEntry,
+    DetailLevel,
     PassthroughTranscriptEntry,
     TranscriptEntry,
     AssistantTranscriptEntry,
@@ -898,6 +899,8 @@ def _generate_paginated_html(
     working_directories: List[str],
     silent: bool = False,
     session_tree: Optional[SessionTree] = None,
+    detail: DetailLevel = DetailLevel.FULL,
+    compact: bool = False,
 ) -> Path:
     """Generate paginated HTML files for combined transcript.
 
@@ -914,7 +917,7 @@ def _generate_paginated_html(
     Returns:
         Path to the first page (combined_transcripts.html)
     """
-    from .html.renderer import generate_html
+    from .html.renderer import HtmlRenderer
     from .utils import format_timestamp
 
     # Check if page size changed - if so, invalidate all pages
@@ -1053,7 +1056,10 @@ def _generate_paginated_html(
 
         # Generate HTML for this page
         page_title = f"{title} - Page {page_num}" if page_num > 1 else title
-        html_content = generate_html(
+        page_renderer = HtmlRenderer()
+        page_renderer.detail = detail
+        page_renderer.compact = compact
+        html_content = page_renderer.generate(
             page_messages,
             page_title,
             page_info=page_info,
@@ -1118,6 +1124,8 @@ def convert_jsonl_to(
     silent: bool = False,
     image_export_mode: Optional[str] = None,
     page_size: int = 2000,
+    detail: DetailLevel = DetailLevel.FULL,
+    compact: bool = False,
 ) -> Path:
     """Convert JSONL transcript(s) to the specified format.
 
@@ -1133,6 +1141,7 @@ def convert_jsonl_to(
         image_export_mode: Image export mode ("placeholder", "embedded", "referenced").
         page_size: Maximum messages per page for combined transcript pagination.
             If None, uses format default (embedded for HTML, referenced for Markdown).
+        detail: Output detail level (full, high, low, minimal).
     """
     if not input_path.exists():
         raise FileNotFoundError(f"Input path not found: {input_path}")
@@ -1231,7 +1240,7 @@ def convert_jsonl_to(
 
     # Generate combined output file (check if regeneration needed)
     assert output_path is not None
-    renderer = get_renderer(format, image_export_mode)
+    renderer = get_renderer(format, image_export_mode, detail=detail, compact=compact)
 
     # Decide whether to use pagination (HTML only, directory mode, no date filter)
     use_pagination = False
@@ -1283,6 +1292,8 @@ def convert_jsonl_to(
             working_directories,
             silent=silent,
             session_tree=session_tree,
+            detail=detail,
+            compact=compact,
         )
     else:
         # Use single-file generation for small projects or filtered views
@@ -1295,6 +1306,8 @@ def convert_jsonl_to(
                 or from_date is not None
                 or to_date is not None
                 or not output_path.exists()
+                or detail != DetailLevel.FULL
+                or compact
             )
         else:
             # Fallback: old logic for single file mode or no cache
@@ -1304,6 +1317,8 @@ def convert_jsonl_to(
                 or to_date is not None
                 or not output_path.exists()
                 or (input_path.is_dir() and cache_was_updated)
+                or detail != DetailLevel.FULL
+                or compact
             )
 
         if should_regenerate:
@@ -1338,6 +1353,8 @@ def convert_jsonl_to(
             image_export_mode,
             silent=silent,
             session_tree=session_tree,
+            detail=detail,
+            compact=compact,
         )
 
     return output_path
@@ -1689,6 +1706,8 @@ def _generate_individual_session_files(
     image_export_mode: Optional[str] = None,
     silent: bool = False,
     session_tree: Optional[SessionTree] = None,
+    detail: DetailLevel = DetailLevel.FULL,
+    compact: bool = False,
 ) -> int:
     """Generate individual files for each session in the specified format.
 
@@ -1728,7 +1747,7 @@ def _generate_individual_session_files(
     project_title = get_project_display_name(output_dir.name, working_directories)
 
     # Get renderer once outside the loop
-    renderer = get_renderer(format, image_export_mode)
+    renderer = get_renderer(format, image_export_mode, detail=detail, compact=compact)
     regenerated_count = 0
 
     # Generate HTML file for each session
@@ -1823,6 +1842,8 @@ def generate_single_session_file(
     output: Optional[Path] = None,
     use_cache: bool = True,
     image_export_mode: Optional[str] = None,
+    detail: DetailLevel = DetailLevel.FULL,
+    compact: bool = False,
 ) -> Path:
     """Generate a single session output file for the given session ID.
 
@@ -1833,6 +1854,8 @@ def generate_single_session_file(
         output: Optional output file path (defaults to session-{id}.{ext} in input_path)
         use_cache: Whether to use caching
         image_export_mode: Image export mode
+        detail: Output detail level.
+        compact: Whether to merge consecutive same-type headings (Markdown only).
 
     Returns:
         Path to the generated file
@@ -1929,7 +1952,7 @@ def generate_single_session_file(
         output_file = input_path / f"session-{matched_id}.{ext}"
 
     # Generate content and write
-    renderer = get_renderer(format, image_export_mode)
+    renderer = get_renderer(format, image_export_mode, detail=detail, compact=compact)
     session_content = renderer.generate_session(
         session_messages, matched_id, session_title, cache_manager, output_dir
     )
@@ -1992,6 +2015,8 @@ def process_projects_hierarchy(
     image_export_mode: Optional[str] = None,
     silent: bool = True,
     page_size: int = 2000,
+    detail: DetailLevel = DetailLevel.FULL,
+    compact: bool = False,
 ) -> Path:
     """Process the entire ~/.claude/projects/ hierarchy and create linked output files.
 
@@ -2148,6 +2173,8 @@ def process_projects_hierarchy(
                     silent=silent,
                     image_export_mode=image_export_mode,
                     page_size=page_size,
+                    detail=detail,
+                    compact=compact,
                 )
 
                 # Track timing
@@ -2158,9 +2185,11 @@ def process_projects_hierarchy(
                     progress_parts.append(f"{stats.files_updated} files updated")
                 if stats.sessions_regenerated > 0:
                     progress_parts.append(f"{stats.sessions_regenerated} sessions")
-                detail = ", ".join(progress_parts) if progress_parts else "regenerated"
+                progress_detail = (
+                    ", ".join(progress_parts) if progress_parts else "regenerated"
+                )
                 print(
-                    f"  {project_dir.name}: {detail}{archived_suffix} ({stats.total_time:.1f}s)"
+                    f"  {project_dir.name}: {progress_detail}{archived_suffix} ({stats.total_time:.1f}s)"
                 )
 
             # Get project info for index - use cached data if available

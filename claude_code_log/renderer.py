@@ -15,15 +15,18 @@ if TYPE_CHECKING:
     from .dag import SessionTree
 
 from .models import (
+    DetailLevel,
     MessageContent,
     MessageMeta,
     MessageType,
     TranscriptEntry,
+    AssistantMessageModel,
     AssistantTranscriptEntry,
     PassthroughTranscriptEntry,
     SystemTranscriptEntry,
     SummaryTranscriptEntry,
     QueueOperationTranscriptEntry,
+    UserMessageModel,
     UserTranscriptEntry,
     ContentItem,
     TextContent,
@@ -567,6 +570,7 @@ class TemplateSummary:
 def generate_template_messages(
     messages: list[TranscriptEntry],
     session_tree: Optional["SessionTree"] = None,
+    detail: DetailLevel | str = DetailLevel.FULL,
 ) -> Tuple[list[TemplateMessage], list[dict[str, Any]], RenderingContext]:
     """Generate root messages and session navigation from transcript messages.
 
@@ -577,6 +581,8 @@ def generate_template_messages(
         messages: List of transcript entries to process.
         session_tree: Optional pre-built SessionTree from DAG construction.
             When provided, avoids an expensive DAG rebuild.
+        detail: Output detail level controlling which message types are included.
+            Accepts either a DetailLevel enum or a plain string (e.g. "low").
 
     Returns:
         A tuple of (root_messages, session_nav, context) where:
@@ -585,6 +591,10 @@ def generate_template_messages(
         - context: RenderingContext with message registry for index lookups
     """
     from .utils import get_warmup_session_ids
+
+    # Normalize plain string to DetailLevel for convenience (e.g. from CLI)
+    if not isinstance(detail, DetailLevel):
+        detail = DetailLevel(detail)
 
     # Performance timing
     t_start = time.time()
@@ -612,6 +622,11 @@ def generate_template_messages(
     # Filter messages (removes summaries, warmup, empty, etc.)
     with log_timing("Filter messages", t_start):
         filtered_messages = _filter_messages(messages)
+
+    # Detail-level pre-render filter
+    if detail != DetailLevel.FULL:
+        with log_timing(f"Detail filter ({detail.value})", t_start):
+            filtered_messages = _filter_by_detail(filtered_messages, detail)
 
     # Pass 1: Collect session metadata and token tracking
     with log_timing("Collect session info", t_start):
@@ -675,6 +690,12 @@ def generate_template_messages(
                 if non_empty < 2:
                     fork_msg.junction_forward_links.clear()
                     fork_msg.fork_point_preview = ""
+
+    # Detail-level post-render: remove text-derived types per level
+    if detail != DetailLevel.FULL:
+        with log_timing(f"Detail post-render filter ({detail.value})", t_start):
+            filtered = _filter_template_by_detail(ctx.messages, detail)
+            _reindex_filtered_context(ctx, filtered)
 
     # Prepare session navigation data (uses ctx for session header indices)
     session_nav: list[dict[str, Any]] = []
@@ -970,8 +991,20 @@ def prepare_session_navigation(
 
         # For each junction point, insert fork-point and branch nav items
         for attachment_uuid, branches in junction_branches.items():
+            # Drop branches whose first message was filtered out (e.g. a
+            # passthrough attachment) — their #msg-d-None anchor points
+            # nowhere. If no navigable branches remain, the fork point
+            # itself is useless and is dropped too.
+            navigable_branches = [
+                b
+                for b in branches
+                if ctx.session_first_message.get(b["sid"]) is not None
+            ]
+            if not navigable_branches:
+                continue
+
             # Find the session nav item that contains this junction
-            parent_sid = branches[0].get("parent_session_id", "")
+            parent_sid = navigable_branches[0].get("parent_session_id", "")
             parent_nav_idx = next(
                 (i for i, n in enumerate(session_nav) if n["id"] == parent_sid),
                 None,
@@ -1004,7 +1037,7 @@ def prepare_session_navigation(
             fork_label = (
                 f"Fork point • {fork_preview}"
                 if fork_preview
-                else f"Fork point ({len(branches)} branches)"
+                else f"Fork point ({len(navigable_branches)} branches)"
             )
 
             fork_nav = {
@@ -1026,7 +1059,7 @@ def prepare_session_navigation(
             insert_pos += 1
 
             # Branch nav items
-            for branch in branches:
+            for branch in navigable_branches:
                 branch_sid = branch["sid"]
                 branch_msg_idx = ctx.session_first_message.get(branch_sid)
                 branch_nav = {
@@ -1050,7 +1083,90 @@ def prepare_session_navigation(
                 session_nav.insert(insert_pos, branch_nav)
                 insert_pos += 1
 
+    # Surface compact_boundary ruptures as navigational landmarks.
+    # A CompactedSummaryMessage marks the point where `/compact` was run and
+    # pre-compaction context was replaced with a summary — a real content
+    # discontinuity that's useful to jump to.
+    compact_by_session: dict[str, list[TemplateMessage]] = {}
+    for msg in ctx.messages:
+        if isinstance(msg.content, CompactedSummaryMessage):
+            compact_by_session.setdefault(msg.render_session_id, []).append(msg)
+
+    # Build a uuid → TemplateMessage lookup so each compaction landmark
+    # can read preTokens / trigger from its preceding system entry.
+    uuid_to_msg: dict[str, TemplateMessage] = {
+        msg.meta.uuid: msg for msg in ctx.messages if msg.meta.uuid
+    }
+
+    for comp_sid, comp_msgs in compact_by_session.items():
+        comp_msgs.sort(key=lambda m: m.meta.timestamp)
+        parent_nav_idx = next(
+            (i for i, n in enumerate(session_nav) if n["id"] == comp_sid),
+            None,
+        )
+        if parent_nav_idx is None:
+            continue
+        parent_depth = session_nav[parent_nav_idx]["depth"]
+        insert_pos = parent_nav_idx + 1
+        # Skip past any existing children of this parent (branches, etc.)
+        while (
+            insert_pos < len(session_nav)
+            and session_nav[insert_pos].get("depth", 0) > parent_depth
+        ):
+            insert_pos += 1
+
+        for comp_msg in comp_msgs:
+            if comp_msg.message_index is None:
+                continue
+            label = _compact_nav_label(comp_msg, uuid_to_msg)
+            comp_nav = {
+                "id": f"compact-{comp_msg.message_index}",
+                "message_index": comp_msg.message_index,
+                "summary": None,
+                "timestamp_range": "",
+                "first_timestamp": comp_msg.meta.timestamp,
+                "last_timestamp": "",
+                "message_count": 0,
+                "first_user_message": label,
+                "token_summary": "",
+                "parent_session_id": comp_sid,
+                "parent_message_index": session_nav[parent_nav_idx]["message_index"],
+                "depth": parent_depth + 1,
+                "is_compaction_point": True,
+            }
+            session_nav.insert(insert_pos, comp_nav)
+            insert_pos += 1
+
     return session_nav
+
+
+def _compact_nav_label(
+    comp_msg: "TemplateMessage",
+    uuid_to_msg: dict[str, "TemplateMessage"],
+) -> str:
+    """Build the nav label for a CompactedSummaryMessage landmark.
+
+    Enriches with preTokens (rounded to thousands) when the parent
+    system/compact_boundary entry exposes it via `SystemMessage`,
+    plus the summary's own formatted timestamp.
+
+    Example: "Conversation compacted (115k tokens) • 2026-04-14 09:09"
+    """
+    parts: list[str] = ["Conversation compacted"]
+    parent_uuid = comp_msg.meta.parent_uuid
+    if parent_uuid:
+        parent = uuid_to_msg.get(parent_uuid)
+        if parent is not None and isinstance(parent.content, SystemMessage):
+            pre_tokens = parent.content.compact_pre_tokens
+            if pre_tokens:
+                if pre_tokens >= 1000:
+                    parts[0] += f" ({pre_tokens // 1000}k tokens)"
+                else:
+                    parts[0] += f" ({pre_tokens} tokens)"
+    ts = format_timestamp(comp_msg.meta.timestamp) if comp_msg.meta.timestamp else ""
+    if ts:
+        parts.append(ts)
+    return " • ".join(parts)
 
 
 # Type alias for chunk output: either a list of regular items or a single special item
@@ -1432,15 +1548,25 @@ def _build_message_hierarchy(messages: list[TemplateMessage]) -> None:
 
     Ancestry stores message_index integers. Templates prefix with "d-" for CSS classes.
 
+    Branch-headers (within-session forks) sit at fractional level 0.5 —
+    between the parent session-header (0) and user messages (1) — so they
+    nest under the parent session rather than restart the ancestry. This
+    lets fold controls on the parent session cascade into branch content.
+
     Args:
         messages: List of template messages in their final order (modified in place)
     """
-    # Stack of (level, message_index) tuples
-    hierarchy_stack: list[tuple[int, int]] = []
+    # Stack of (level, message_index) tuples. Levels may be fractional for
+    # within-session branch-headers; see class-level note.
+    hierarchy_stack: list[tuple[float, int]] = []
 
     for message in messages:
-        # Session headers are level 0
-        if message.is_session_header:
+        # Branch-headers sit between session (0) and user (1) so they stay
+        # within their parent session's ancestry chain.
+        current_level: float
+        if message.is_branch_header:
+            current_level = 0.5
+        elif message.is_session_header:
             current_level = 0
         else:
             # Determine level from message type and modifiers
@@ -1803,6 +1929,163 @@ def _filter_messages(messages: list[TranscriptEntry]) -> list[TranscriptEntry]:
         filtered.append(message)
 
     return filtered
+
+
+# -- Detail-level filtering ---------------------------------------------------
+#
+# Pre-render: strip content items from TranscriptEntry based on detail level.
+# Post-render: remove TemplateMessage types created by factories from text that
+# shouldn't appear at the given level (bash I/O, slash commands, etc.).
+
+# Tool names kept at --detail low (interaction + key signals).
+_LOW_KEEP_TOOLS = {"WebSearch", "WebFetch", "Task"}
+
+# Post-render classes excluded per level (cumulative: each level adds to the
+# previous). HIGH excludes system/hook noise; LOW adds bash and tools; MINIMAL
+# adds everything except user/assistant text.
+_HIGH_EXCLUDE_CLASSES: tuple[type[MessageContent], ...] = (
+    SlashCommandMessage,
+    UserSlashCommandMessage,
+    CommandOutputMessage,
+    CompactedSummaryMessage,
+    UserMemoryMessage,
+    SystemMessage,
+    HookSummaryMessage,
+    UnknownMessage,
+)
+
+_LOW_EXCLUDE_CLASSES: tuple[type[MessageContent], ...] = (
+    *_HIGH_EXCLUDE_CLASSES,
+    BashInputMessage,
+    BashOutputMessage,
+    ThinkingMessage,
+)
+
+_MINIMAL_EXCLUDE_CLASSES: tuple[type[MessageContent], ...] = (
+    *_LOW_EXCLUDE_CLASSES,
+    ToolUseMessage,
+    ToolResultMessage,
+)
+
+
+def _filter_by_detail(
+    messages: list[TranscriptEntry],
+    detail: DetailLevel,
+) -> list[TranscriptEntry]:
+    """Pre-render filter: strip content items per detail level.
+
+    - MINIMAL: keep only user/assistant text (no tools, thinking, system).
+    - LOW: keep user/assistant text + WebSearch/WebFetch/Task tools.
+    - HIGH: keep user/assistant + all tools/thinking, drop system entries.
+    """
+    from copy import copy
+
+    if detail == DetailLevel.MINIMAL:
+        strip_types: tuple[type, ...] = (
+            ThinkingContent,
+            ToolUseContent,
+            ToolResultContent,
+        )
+    elif detail == DetailLevel.LOW:
+        strip_types = (ThinkingContent,)
+        # ToolUseContent and ToolResultContent kept for _LOW_KEEP_TOOLS;
+        # others removed in post-render by _filter_template_by_detail.
+    else:
+        # HIGH: no content-item stripping needed
+        strip_types = ()
+
+    filtered: list[TranscriptEntry] = []
+    for message in messages:
+        # HIGH/LOW/MINIMAL: drop system entries (factory creates SystemMessage)
+        if not isinstance(message, (UserTranscriptEntry, AssistantTranscriptEntry)):
+            continue
+        # LOW/MINIMAL: drop sidechain (subagent) messages entirely
+        if detail in (DetailLevel.MINIMAL, DetailLevel.LOW) and message.isSidechain:
+            continue
+        if not strip_types:
+            filtered.append(message)
+            continue
+        text_items: list[ContentItem] = [
+            item
+            for item in message.message.content
+            if not isinstance(item, strip_types)
+        ]
+        if text_items:
+            msg_copy = copy(message)
+            msg_model = copy(message.message)
+            msg_model.content = text_items
+            if isinstance(msg_copy, UserTranscriptEntry):
+                msg_copy.message = cast("UserMessageModel", msg_model)
+            else:
+                msg_copy.message = cast("AssistantMessageModel", msg_model)
+            filtered.append(msg_copy)
+    return filtered
+
+
+def _reindex_filtered_context(
+    ctx: RenderingContext, filtered: list[TemplateMessage]
+) -> None:
+    """Rebuild index references after the detail-level filter drops messages.
+
+    `RenderingContext.get(i)` treats `message_index` as a position in
+    `ctx.messages`, and several downstream passes (pair identification,
+    session nav) use stored `message_index` values to look things up.
+    When `_filter_template_by_detail` drops messages, the surviving
+    entries still carry their original indices — so `ctx.get()` returns
+    the wrong message and session navigation points at stale anchors.
+
+    Rewrite `ctx.messages` to the filtered list and remap every index
+    reference to the new positions. Entries whose targets were filtered
+    out are dropped (session_first_message) or unset (pair_first,
+    pair_last), letting later passes regenerate them from scratch.
+    """
+    index_remap: dict[int, int] = {}
+    for new_idx, msg in enumerate(filtered):
+        old_idx = msg.message_index
+        if old_idx is not None:
+            index_remap[old_idx] = new_idx
+        msg.message_index = new_idx
+        msg.content.message_index = new_idx
+        # Pair linkage is re-established post-filter by
+        # `_identify_message_pairs`; clear any stale references first.
+        msg.pair_first = None
+        msg.pair_last = None
+
+    ctx.messages = filtered
+    ctx.session_first_message = {
+        sid: new_idx
+        for sid, old_idx in ctx.session_first_message.items()
+        if (new_idx := index_remap.get(old_idx)) is not None
+    }
+
+
+def _filter_template_by_detail(
+    messages: list[TemplateMessage],
+    detail: DetailLevel,
+) -> list[TemplateMessage]:
+    """Post-render filter: remove TemplateMessage types per detail level."""
+    if detail == DetailLevel.MINIMAL:
+        exclude = _MINIMAL_EXCLUDE_CLASSES
+    elif detail == DetailLevel.LOW:
+        exclude = _LOW_EXCLUDE_CLASSES
+    else:
+        exclude = _HIGH_EXCLUDE_CLASSES
+
+    result: list[TemplateMessage] = []
+    for msg in messages:
+        if isinstance(msg.content, exclude):
+            continue
+        if detail in (DetailLevel.MINIMAL, DetailLevel.LOW) and msg.is_sidechain:
+            continue
+        # LOW: drop tool_use/tool_result unless it's a kept tool
+        if detail == DetailLevel.LOW and isinstance(
+            msg.content, (ToolUseMessage, ToolResultMessage)
+        ):
+            tool_name = getattr(msg.content, "tool_name", "")
+            if tool_name not in _LOW_KEEP_TOOLS:
+                continue
+        result.append(msg)
+    return result
 
 
 def _collect_session_info(
@@ -2398,6 +2681,9 @@ class Renderer:
     - Subclasses override methods to implement format-specific rendering
     """
 
+    detail: DetailLevel = DetailLevel.FULL
+    compact: bool = False
+
     def _dispatch_format(self, obj: Any, message: TemplateMessage) -> str:
         """Dispatch to format_{ClassName}(obj, message) based on object type."""
         for cls in type(obj).__mro__:
@@ -2673,13 +2959,20 @@ class Renderer:
         return None
 
 
-def get_renderer(format: str, image_export_mode: Optional[str] = None) -> Renderer:
+def get_renderer(
+    format: str,
+    image_export_mode: Optional[str] = None,
+    detail: DetailLevel = DetailLevel.FULL,
+    compact: bool = False,
+) -> Renderer:
     """Get a renderer instance for the specified format.
 
     Args:
         format: The output format ("html", "md", or "markdown").
         image_export_mode: Image export mode ("placeholder", "embedded", "referenced").
             If None, defaults to "embedded" for HTML and "referenced" for Markdown.
+        detail: Output detail level controlling which message types are included.
+        compact: If True, merge consecutive same-type headings (Markdown only).
 
     Returns:
         A Renderer instance for the specified format.
@@ -2692,14 +2985,18 @@ def get_renderer(format: str, image_export_mode: Optional[str] = None) -> Render
 
         # For HTML, default to embedded mode (current behavior)
         mode = image_export_mode or "embedded"
-        return HtmlRenderer(image_export_mode=mode)
+        renderer = HtmlRenderer(image_export_mode=mode)
     elif format in ("md", "markdown"):
         from .markdown.renderer import MarkdownRenderer
 
         # For Markdown, default to referenced mode
         mode = image_export_mode or "referenced"
-        return MarkdownRenderer(image_export_mode=mode)
-    raise ValueError(f"Unsupported format: {format}")
+        renderer = MarkdownRenderer(image_export_mode=mode)
+    else:
+        raise ValueError(f"Unsupported format: {format}")
+    renderer.detail = detail
+    renderer.compact = compact
+    return renderer
 
 
 def is_html_outdated(html_file_path: Path) -> bool:

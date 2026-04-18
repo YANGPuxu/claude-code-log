@@ -19,6 +19,13 @@
                 &#x2442; {{ session.first_user_message }}
             </a>
         </div>
+        {% elif session.is_compaction_point is defined and session.is_compaction_point %}
+        <div class='session-nav-item session-compaction-point'
+            style='margin-left: {{ session.depth * 24 }}px'>
+            <a href='#msg-d-{{ session.message_index }}' class='compaction-link'>
+                &#x1F4E6; {{ session.first_user_message }}
+            </a>
+        </div>
         {% elif session.is_branch is defined and session.is_branch %}
         <div class='session-nav-item session-branch'
             style='margin-left: {{ session.depth * 24 }}px'>

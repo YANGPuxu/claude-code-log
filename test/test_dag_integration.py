@@ -729,10 +729,16 @@ class TestWithinSessionForkRealData:
             result, session_tree=session_tree
         )
 
-        # Find branch headers
+        # Branch-headers live under their parent session (ancestry 0.5),
+        # so walk the full tree rather than inspecting only roots.
+        def walk(msgs):
+            for m in msgs:
+                yield m
+                yield from walk(m.children)
+
         branch_headers = [
             tm
-            for tm in root_messages
+            for tm in walk(root_messages)
             if isinstance(tm.content, SessionHeaderMessage) and tm.content.is_branch
         ]
         assert len(branch_headers) >= 2
@@ -1356,3 +1362,143 @@ class TestPassthroughDagChain:
 
         # Only user + assistant should be counted (not the attachment)
         assert session_data["s1"].message_count == 2
+
+
+# =============================================================================
+# Test: compact_boundary nav landmarks
+# =============================================================================
+
+
+COMPACTED_SUMMARY_BODY = (
+    "This session is being continued from a previous conversation that "
+    "ran out of context. The summary below covers the earlier portion."
+)
+
+
+def _make_compact_boundary(
+    uuid: str,
+    session_id: str,
+    timestamp: str,
+    pre_tokens: int = 100_000,
+) -> dict[str, Any]:
+    """Synthesize a system/compact_boundary entry (always parent-null)."""
+    return {
+        "type": "system",
+        "subtype": "compact_boundary",
+        "timestamp": timestamp,
+        "parentUuid": None,
+        "isSidechain": False,
+        "userType": "human",
+        "cwd": "/tmp",
+        "sessionId": session_id,
+        "version": "1.0.0",
+        "uuid": uuid,
+        "content": "Conversation compacted",
+        "compactMetadata": {"trigger": "manual", "preTokens": pre_tokens},
+    }
+
+
+def _make_compacted_summary(
+    uuid: str,
+    session_id: str,
+    timestamp: str,
+    parent_uuid: str,
+) -> dict[str, Any]:
+    """Synthesize the user entry that carries the compacted summary text."""
+    return {
+        "type": "user",
+        "timestamp": timestamp,
+        "parentUuid": parent_uuid,
+        "isSidechain": False,
+        "userType": "human",
+        "cwd": "/tmp",
+        "sessionId": session_id,
+        "version": "1.0.0",
+        "uuid": uuid,
+        "isCompactSummary": True,
+        "message": {"role": "user", "content": COMPACTED_SUMMARY_BODY},
+    }
+
+
+class TestCompactBoundaryNav:
+    """Compacted summaries should appear as navigational landmarks."""
+
+    def test_single_boundary_produces_nav_entry(self, tmp_path: Path) -> None:
+        """One compaction → one compaction-point nav item under the session."""
+        from claude_code_log.renderer import generate_template_messages
+
+        entries = [
+            _make_user_entry("u1", "s1", "2025-07-01T10:00:00.000Z", None, "Initial"),
+            _make_assistant_entry(
+                "a1", "s1", "2025-07-01T10:01:00.000Z", "u1", "Reply"
+            ),
+            _make_compact_boundary("cb1", "s1", "2025-07-01T11:00:00.000Z"),
+            _make_compacted_summary("sum1", "s1", "2025-07-01T11:00:01.000Z", "cb1"),
+            _make_assistant_entry(
+                "a2", "s1", "2025-07-01T11:00:02.000Z", "sum1", "Continuing"
+            ),
+        ]
+        _write_jsonl(tmp_path / "session.jsonl", entries)
+
+        messages, session_tree = load_directory_transcripts(tmp_path, silent=True)
+        _root_msgs, session_nav, _ctx = generate_template_messages(
+            messages, session_tree=session_tree
+        )
+
+        comp_items = [n for n in session_nav if n.get("is_compaction_point")]
+        assert len(comp_items) == 1, (
+            f"Expected one compaction-point nav item; got: {session_nav}"
+        )
+        assert comp_items[0]["parent_session_id"] == "s1"
+        assert comp_items[0]["message_index"] is not None
+        # Label carries preTokens (100k default from _make_compact_boundary)
+        # and a formatted timestamp.
+        label = comp_items[0]["first_user_message"]
+        assert "100k tokens" in label, f"Expected '100k tokens' in {label!r}"
+        assert "2025" in label, f"Expected timestamp in {label!r}"
+
+    def test_multiple_boundaries_in_timestamp_order(self, tmp_path: Path) -> None:
+        """Two compactions → two nav items, ordered chronologically."""
+        from claude_code_log.renderer import generate_template_messages
+
+        entries = [
+            _make_user_entry("u1", "s1", "2025-07-01T10:00:00.000Z", None, "Initial"),
+            _make_compact_boundary("cb1", "s1", "2025-07-01T11:00:00.000Z"),
+            _make_compacted_summary("sum1", "s1", "2025-07-01T11:00:01.000Z", "cb1"),
+            _make_assistant_entry(
+                "a1", "s1", "2025-07-01T11:00:02.000Z", "sum1", "After first"
+            ),
+            _make_compact_boundary("cb2", "s1", "2025-07-01T12:00:00.000Z"),
+            _make_compacted_summary("sum2", "s1", "2025-07-01T12:00:01.000Z", "cb2"),
+            _make_assistant_entry(
+                "a2", "s1", "2025-07-01T12:00:02.000Z", "sum2", "After second"
+            ),
+        ]
+        _write_jsonl(tmp_path / "session.jsonl", entries)
+
+        messages, session_tree = load_directory_transcripts(tmp_path, silent=True)
+        _root_msgs, session_nav, _ctx = generate_template_messages(
+            messages, session_tree=session_tree
+        )
+
+        comp_items = [n for n in session_nav if n.get("is_compaction_point")]
+        assert len(comp_items) == 2
+        # Ordered by first_timestamp
+        assert comp_items[0]["first_timestamp"] < comp_items[1]["first_timestamp"]
+
+    def test_no_boundary_produces_no_nav_entry(self, tmp_path: Path) -> None:
+        """A plain session emits no compaction-point items."""
+        from claude_code_log.renderer import generate_template_messages
+
+        entries = [
+            _make_user_entry("u1", "s1", "2025-07-01T10:00:00.000Z", None, "Q"),
+            _make_assistant_entry("a1", "s1", "2025-07-01T10:01:00.000Z", "u1", "A"),
+        ]
+        _write_jsonl(tmp_path / "session.jsonl", entries)
+
+        messages, session_tree = load_directory_transcripts(tmp_path, silent=True)
+        _root_msgs, session_nav, _ctx = generate_template_messages(
+            messages, session_tree=session_tree
+        )
+
+        assert not any(n.get("is_compaction_point") for n in session_nav)
