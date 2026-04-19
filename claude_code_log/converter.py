@@ -55,6 +55,14 @@ SILENT_SKIP_TYPES: frozenset[str] = frozenset(
     {
         "file-history-snapshot",  # Internal file backup metadata
         "last-prompt",  # Trailing marker written as the last line of a .jsonl
+        # Session metadata snapshots (positional state, no uuid/timestamp).
+        # Recorded whenever Claude Code writes a state checkpoint to the
+        # transcript; see #94 for the wider "propagate this state to
+        # surrounding messages" follow-up.
+        "permission-mode",  # {permissionMode: 'acceptEdits'|...}
+        "custom-title",  # {customTitle: <str>}
+        "agent-name",  # {agentName: <str>}
+        "agent-color",  # {agentColor: <str>}
     }
 )
 
@@ -365,7 +373,7 @@ def load_transcript(
                         # SILENT_SKIP_TYPES once confirmed safe to drop.
                         if not silent:
                             print(
-                                f"Line {line_no} of {jsonl_path}: unrecognised message type "
+                                f"Line {line_no} of {jsonl_path}: unrecognized message type "
                                 f"{entry_type!r} - skipping"
                             )
                 except json.JSONDecodeError as e:
