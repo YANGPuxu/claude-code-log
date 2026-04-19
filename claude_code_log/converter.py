@@ -30,6 +30,7 @@ from .cache import (
 )
 from .parser import parse_timestamp
 from .factories import create_transcript_entry
+from .factories.teammate_factory import find_team_lead_body
 from .models import (
     BaseTranscriptEntry,
     DetailLevel,
@@ -41,6 +42,7 @@ from .models import (
     SystemTranscriptEntry,
     UserTranscriptEntry,
     ToolResultContent,
+    ToolUseContent,
 )
 from .dag import SessionTree, build_dag_from_entries, traverse_session_tree
 from .renderer import get_renderer, is_html_outdated
@@ -401,6 +403,13 @@ def load_transcript(
                         f"\n{traceback.format_exc()}"
                     )
 
+    # Prompt-hash fallback: link Task tool_results that lack a structured
+    # agentId (common for true teammate subagents) by matching the
+    # tool_use's prompt input against the <teammate-message
+    # teammate_id="team-lead"> body of each unlinked subagent file's
+    # first entry. See issue #91 — also fixes #79 and #90 along the way.
+    _link_subagents_by_prompt_hash(messages, jsonl_path, agent_ids)
+
     # Load agent files if any were referenced
     # Build a map of agentId -> agent messages
     agent_messages_map: dict[str, list[TranscriptEntry]] = {}
@@ -461,6 +470,144 @@ def load_transcript(
         cache_manager.save_cached_entries(jsonl_path, messages)
 
     return messages
+
+
+def _link_subagents_by_prompt_hash(
+    messages: list[TranscriptEntry],
+    jsonl_path: Path,
+    agent_ids: set[str],
+) -> None:
+    """Link teammate subagent JSONLs whose agentId isn't in the main transcript.
+
+    Teammate-spawned Tasks sometimes produce tool_results that don't carry a
+    structured ``agentId`` — the linking info only appears in the Markdown
+    metadata tail (parsed separately) or is absent altogether. Older
+    transcripts predate the tail too. For these we fall back to matching
+    the Task tool_use's ``prompt`` input against each unmatched
+    ``subagents/agent-*.jsonl`` file's first-entry content. When the first
+    entry wraps the prompt in ``<teammate-message teammate_id="team-lead">``,
+    that body is compared; otherwise the raw text is.
+
+    On a match, the agent id is added to *agent_ids* (so the existing loader
+    picks the file up) and the corresponding tool_result entry's ``agentId``
+    field is back-patched (so ``_integrate_agent_entries`` anchors the
+    subagent DAG-line to the right place).
+
+    No-op when the subagents dir doesn't exist or every Task is already
+    linked; safe to call unconditionally.
+    """
+    unresolved = _collect_unresolved_task_results(messages)
+    if not unresolved:
+        return
+
+    subagents_dir = jsonl_path.parent / jsonl_path.stem / "subagents"
+    if not subagents_dir.is_dir():
+        return
+
+    # Pre-normalize prompts once, and track which result entries are still
+    # up for grabs. Without this a second agent file with the same
+    # normalized prompt would re-match an already-patched entry, wiping
+    # the first match (concrete repro: team-lead sends identical
+    # instructions to multiple teammates in parallel).
+    remaining: list[tuple[str, UserTranscriptEntry]] = [
+        (_normalize_prompt(prompt), entry) for prompt, entry in unresolved
+    ]
+
+    for agent_file in sorted(subagents_dir.glob("agent-*.jsonl")):
+        candidate_agent_id = agent_file.stem[len("agent-") :]
+        if not candidate_agent_id or candidate_agent_id in agent_ids:
+            continue
+
+        first_text = _read_first_message_text(agent_file)
+        if first_text is None:
+            continue
+
+        candidate_body = find_team_lead_body(first_text) or first_text
+        candidate_norm = _normalize_prompt(candidate_body)
+        if not candidate_norm:
+            continue
+
+        for i, (norm_prompt, result_entry) in enumerate(remaining):
+            if norm_prompt == candidate_norm:
+                agent_ids.add(candidate_agent_id)
+                result_entry.agentId = candidate_agent_id
+                remaining.pop(i)
+                break
+
+
+def _collect_unresolved_task_results(
+    messages: list[TranscriptEntry],
+) -> list[tuple[str, UserTranscriptEntry]]:
+    """Return (prompt, tool_result_entry) for Task results lacking an agentId."""
+    task_prompts: dict[str, str] = {}
+    for msg in messages:
+        if not isinstance(msg, AssistantTranscriptEntry):
+            continue
+        for item in msg.message.content:
+            if isinstance(item, ToolUseContent) and item.name == "Task":
+                prompt = item.input.get("prompt")
+                if isinstance(prompt, str) and prompt:
+                    task_prompts[item.id] = prompt
+
+    unresolved: list[tuple[str, UserTranscriptEntry]] = []
+    for msg in messages:
+        if not isinstance(msg, UserTranscriptEntry):
+            continue
+        if msg.agentId:
+            continue
+        for item in msg.message.content:
+            if not isinstance(item, ToolResultContent):
+                continue
+            prompt = task_prompts.get(item.tool_use_id)
+            if prompt is not None:
+                unresolved.append((prompt, msg))
+                break
+    return unresolved
+
+
+def _read_first_message_text(agent_file: Path) -> Optional[str]:
+    """Return the textual content of the first entry's ``message.content``.
+
+    Handles both string-shaped content (teammate flow) and list-shaped
+    content (plain prompt flow). Returns None for unreadable files.
+    """
+    try:
+        with agent_file.open("r", encoding="utf-8", errors="replace") as f:
+            for raw in f:
+                stripped = raw.strip()
+                if stripped:
+                    line = stripped
+                    break
+            else:
+                return None
+        entry: Any = json.loads(line)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(entry, dict):
+        return None
+
+    entry_dict = cast(dict[str, Any], entry)
+    message = entry_dict.get("message")
+    if not isinstance(message, dict):
+        return None
+    message_dict = cast(dict[str, Any], message)
+    content = message_dict.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        texts: list[str] = []
+        for item in cast(list[Any], content):
+            if isinstance(item, dict):
+                item_dict = cast(dict[str, Any], item)
+                if item_dict.get("type") == "text":
+                    texts.append(str(item_dict.get("text", "")))
+        return "\n".join(texts) if texts else None
+    return None
+
+
+def _normalize_prompt(text: str) -> str:
+    """Whitespace-collapsed, lowercase form for equality comparison."""
+    return " ".join(text.split()).lower()
 
 
 def _integrate_agent_entries(messages: list[TranscriptEntry]) -> None:

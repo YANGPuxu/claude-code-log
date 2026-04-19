@@ -35,11 +35,13 @@ from ..models import (
     ImageContent,
     MessageMeta,
     SlashCommandMessage,
+    TeammateMessage,
     TextContent,
     UserMemoryMessage,
     UserSlashCommandMessage,
     UserTextMessage,
 )
+from .teammate_factory import create_teammate_message, has_teammate_message
 
 
 # =============================================================================
@@ -370,6 +372,7 @@ UserMessageContent = Union[
     UserMemoryMessage,
     UserSlashCommandMessage,
     UserTextMessage,
+    TeammateMessage,
 ]
 
 
@@ -416,6 +419,10 @@ def create_user_message(
 
     if is_bash_output(text_content):
         return create_bash_output_message(meta, text_content)
+
+    if has_teammate_message(text_content):
+        if teammate := create_teammate_message(meta, text_content):
+            return teammate
 
     # Slash command expanded prompts - combine all text as markdown
     if is_slash_command:

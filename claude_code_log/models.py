@@ -175,6 +175,7 @@ class BaseTranscriptEntry(BaseModel):
     isMeta: Optional[bool] = None
     agentId: Optional[str] = None  # Agent ID for sidechain messages
     gitBranch: Optional[str] = None  # Git branch name when available
+    teamName: Optional[str] = None  # Active team name (teammates feature)
 
 
 class UserTranscriptEntry(BaseTranscriptEntry):
@@ -292,6 +293,7 @@ class MessageMeta:
     agent_id: Optional[str] = None
     cwd: str = ""
     git_branch: Optional[str] = None
+    team_name: Optional[str] = None  # Active team name (teammates feature)
 
     @classmethod
     def empty(cls, uuid: str = "") -> "MessageMeta":
@@ -600,6 +602,52 @@ class UserSteeringMessage(UserTextMessage):
     pass
 
 
+@dataclass
+class TeammateMessageBlock:
+    """A single <teammate-message> block extracted from a User entry.
+
+    `is_system=True` corresponds to blocks with teammate_id="system"
+    (e.g. teammate_terminated notifications).
+
+    This is a plain data container — the renderer-facing MessageContent
+    wrapper is TeammateMessage (which holds one or more of these blocks).
+    """
+
+    teammate_id: str
+    body: str
+    color: Optional[str] = None
+    summary: Optional[str] = None
+    is_system: bool = False
+
+
+@dataclass
+class TeammateMessage(MessageContent):
+    """Content for one or more <teammate-message> blocks in a single User entry.
+
+    Teammate messages are emitted when the experimental teammates feature
+    (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`) is active. A single User
+    entry may carry several `<teammate-message>` blocks — potentially from
+    different teammates — so the factory groups them into `blocks` and
+    preserves any non-matching surrounding text in `leading_text` /
+    `trailing_text`. The renderer decides whether to present each block
+    as its own card or merge them into one.
+    """
+
+    blocks: list[TeammateMessageBlock] = field(
+        default_factory=lambda: list[TeammateMessageBlock]()
+    )
+    leading_text: Optional[str] = None
+    trailing_text: Optional[str] = None
+
+    @property
+    def message_type(self) -> str:
+        return "teammate"
+
+    @property
+    def has_markdown(self) -> bool:
+        return True
+
+
 # =============================================================================
 # Assistant Message Content Models
 # =============================================================================
@@ -855,6 +903,11 @@ class TaskInput(BaseModel):
     model: Optional[Literal["sonnet", "opus", "haiku"]] = None
     run_in_background: Optional[bool] = None
     resume: Optional[str] = None
+    # Teammate-spawned Task fields (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1).
+    # Populated when the team-lead spawns a named teammate via Task.
+    team_name: Optional[str] = None
+    name: Optional[str] = None
+    mode: Optional[str] = None
 
 
 class TodoWriteItem(BaseModel):
@@ -933,6 +986,67 @@ class WebFetchInput(BaseModel):
     prompt: str
 
 
+# =============================================================================
+# Teammates feature tool inputs
+# =============================================================================
+# CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 surfaces six team-management tools.
+# Schemas are lenient (model_config extra="allow") so unknown fields survive.
+
+
+class TeamCreateInput(BaseModel):
+    """Input parameters for the TeamCreate tool."""
+
+    team_name: str = ""
+    description: Optional[str] = None
+    agent_type: Optional[str] = None
+
+    model_config = {"extra": "allow"}
+
+
+class TeamDeleteInput(BaseModel):
+    """Input parameters for the TeamDelete tool (typically empty)."""
+
+    team_name: Optional[str] = None
+
+    model_config = {"extra": "allow"}
+
+
+class TaskCreateInput(BaseModel):
+    """Input parameters for the TaskCreate tool (teammate task board)."""
+
+    subject: str = ""
+    description: Optional[str] = None
+    activeForm: Optional[str] = None
+
+    model_config = {"extra": "allow"}
+
+
+class TaskUpdateInput(BaseModel):
+    """Input parameters for the TaskUpdate tool (teammate task board)."""
+
+    taskId: str = ""
+    owner: Optional[str] = None
+    status: Optional[str] = None
+
+    model_config = {"extra": "allow"}
+
+
+class TaskListInput(BaseModel):
+    """Input parameters for the TaskList tool (empty in practice)."""
+
+    model_config = {"extra": "allow"}
+
+
+class SendMessageInput(BaseModel):
+    """Input parameters for the SendMessage tool (team-lead → teammate)."""
+
+    type: Optional[str] = None
+    recipient: Optional[str] = None
+    content: str = ""
+
+    model_config = {"extra": "allow"}
+
+
 # Union of all typed tool inputs
 ToolInput = Union[
     BashInput,
@@ -948,6 +1062,12 @@ ToolInput = Union[
     ExitPlanModeInput,
     WebSearchInput,
     WebFetchInput,
+    TeamCreateInput,
+    TeamDeleteInput,
+    TaskCreateInput,
+    TaskUpdateInput,
+    TaskListInput,
+    SendMessageInput,
     ToolUseContent,  # Generic fallback when no specialized parser
 ]
 
@@ -1025,14 +1145,49 @@ class BashOutput:
 
 
 @dataclass
+class AgentResultMetadata:
+    """Structured metadata parsed from the Markdown tail of a Task tool_result.
+
+    Teammate-spawned agents (and async task agents) embed linking and
+    accounting info at the end of the agent's response:
+
+        agentId: <id> (use SendMessage with to: '...' to continue this agent)
+        worktreePath: /.../worktrees/agent-<id>
+        worktreeBranch: worktree-agent-<id>
+        <usage>total_tokens: 48421
+        tool_uses: 24
+        duration_ms: 802753</usage>
+
+    Exposes the parsed fields so the renderer can surface them structurally
+    (and so the converter can use `agent_id` to link subagent JSONL files
+    back to their spawning Task tool_use).
+    """
+
+    agent_id: Optional[str] = None
+    worktree_path: Optional[str] = None
+    worktree_branch: Optional[str] = None
+    total_tokens: Optional[int] = None
+    tool_uses: Optional[int] = None
+    duration_ms: Optional[int] = None
+
+
+@dataclass
 class TaskOutput:
     """Parsed Task (sub-agent) tool output.
 
     Symmetric with TaskInput for tool_use → tool_result pairing.
-    Contains the agent's final response as markdown.
+    Contains the agent's final response as markdown. Teammate-spawned tasks
+    also populate `metadata` (see AgentResultMetadata) — set by the tool
+    factory when the result tail carries `agentId:` / `worktreePath:` / ...
     """
 
-    result: str  # Agent's response (markdown)
+    result: str  # Agent's response (markdown), metadata tail stripped
+    metadata: Optional[AgentResultMetadata] = None
+    # Teammate-spawn pathway fields. Populated when the Task was spawned for
+    # a named teammate; sourced from the tool_use input and/or tool_result.
+    teammate_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    color: Optional[str] = None
 
 
 @dataclass
@@ -1134,6 +1289,90 @@ class WebFetchOutput:
     duration_ms: Optional[int] = None  # Time taken in milliseconds
 
 
+# =============================================================================
+# Teammates feature tool outputs
+# =============================================================================
+
+
+@dataclass
+class TeamCreateOutput:
+    """Parsed TeamCreate tool output."""
+
+    team_name: str
+    team_file_path: Optional[str] = None
+    lead_agent_id: Optional[str] = None
+    raw_text: Optional[str] = None  # Original content if JSON parsing failed
+
+
+@dataclass
+class TeamDeleteOutput:
+    """Parsed TeamDelete tool output."""
+
+    success: bool
+    message: str = ""
+    team_name: Optional[str] = None
+    active_members: Optional[list[str]] = None
+    raw_text: Optional[str] = None
+
+
+@dataclass
+class TaskCreateOutput:
+    """Parsed TaskCreate tool output (teammate task board)."""
+
+    task_id: str
+    subject: str = ""
+    raw_text: Optional[str] = None
+
+
+@dataclass
+class TaskStatusChange:
+    """from → to status transition for TaskUpdate."""
+
+    from_status: Optional[str] = None
+    to_status: Optional[str] = None
+
+
+@dataclass
+class TaskUpdateOutput:
+    """Parsed TaskUpdate tool output (teammate task board)."""
+
+    success: bool
+    task_id: str = ""
+    updated_fields: Optional[dict[str, Any]] = None
+    status_change: Optional[TaskStatusChange] = None
+    raw_text: Optional[str] = None
+
+
+@dataclass
+class TaskListItem:
+    """Single task row in TaskList output."""
+
+    id: str
+    subject: str = ""
+    status: Optional[str] = None
+    owner: Optional[str] = None
+    blocked_by: Optional[list[str]] = None
+
+
+@dataclass
+class TaskListOutput:
+    """Parsed TaskList tool output (teammate task board)."""
+
+    tasks: list[TaskListItem]
+    raw_text: Optional[str] = None
+
+
+@dataclass
+class SendMessageOutput:
+    """Parsed SendMessage tool output (team-lead → teammate)."""
+
+    success: bool
+    message: str = ""
+    request_id: Optional[str] = None
+    target: Optional[str] = None
+    raw_text: Optional[str] = None
+
+
 # Union of all specialized output types + ToolResultContent as generic fallback
 ToolOutput = Union[
     ReadOutput,
@@ -1145,6 +1384,12 @@ ToolOutput = Union[
     ExitPlanModeOutput,
     WebSearchOutput,
     WebFetchOutput,
+    TeamCreateOutput,
+    TeamDeleteOutput,
+    TaskCreateOutput,
+    TaskUpdateOutput,
+    TaskListOutput,
+    SendMessageOutput,
     # TODO: Add as parsers are implemented:
     # GlobOutput, GrepOutput
     ToolResultContent,  # Generic fallback for unparsed results

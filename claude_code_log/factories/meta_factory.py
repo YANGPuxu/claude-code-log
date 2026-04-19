@@ -30,4 +30,5 @@ def create_meta(transcript: BaseTranscriptEntry) -> MessageMeta:
         agent_id=transcript.agentId,
         cwd=transcript.cwd,
         git_branch=transcript.gitBranch,
+        team_name=getattr(transcript, "teamName", None),
     )
