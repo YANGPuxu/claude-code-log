@@ -618,6 +618,30 @@
       text-transform: uppercase;
       letter-spacing: 0.5px;
   }
+  /* Per-level variant links on the project card */
+  .project-variants {
+      margin-top: 4px;
+      font-size: 0.75em;
+      color: #888;
+  }
+  
+  .project-variants .variant-hint {
+      margin-right: 4px;
+  }
+  
+  .project-variants .variant-link {
+      display: inline-block;
+      padding: 1px 6px;
+      margin-right: 4px;
+      border: 1px solid #ccc;
+      border-radius: 3px;
+      color: #555;
+      text-decoration: none;
+  }
+  
+  .project-variants .variant-link:hover {
+      background-color: #f0f0f0;
+  }
   /* Search Bar Styles */
   .search-container {
       position: relative;
@@ -1821,6 +1845,7 @@
                   <span class="transcript-link-hint">(← open combined transcript)</span>
                   
               </div>
+              
               <div class='project-stats'>
                   <div class='stat'>📁 3 transcript files</div>
                   <div class='stat'>💬 25 messages</div>
@@ -1840,6 +1865,7 @@
                   <span class="transcript-link-hint">(← open combined transcript)</span>
                   
               </div>
+              
               <div class='project-stats'>
                   <div class='stat'>📁 5 transcript files</div>
                   <div class='stat'>💬 42 messages</div>

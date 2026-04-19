@@ -6,7 +6,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from .models import ContentItem, TextContent, TranscriptEntry, UserTranscriptEntry
+from .models import (
+    ContentItem,
+    DetailLevel,
+    TextContent,
+    TranscriptEntry,
+    UserTranscriptEntry,
+)
 from .factories import (
     IDE_DIAGNOSTICS_PATTERN,
     IDE_OPENED_FILE_PATTERN,
@@ -15,6 +21,53 @@ from .factories import (
     is_local_command_output,
     is_system_message,
 )
+
+
+# Per-level output file naming
+#
+# Variants of the same project render to distinct filenames so each
+# variant has its own on-disk artifact and its own cache row. Examples:
+#
+#   --detail full                          → combined_transcripts.html
+#   --detail low                           → combined_transcripts.low.html
+#   --detail low --compact (md only)       → combined_transcripts.low.compact.md
+#   --compact (md only)                    → combined_transcripts.compact.md
+#
+# Pagination composes after the variant suffix:
+#   combined_transcripts.low_2.html        (detail=low, page 2)
+#
+# `_compact` only participates in the suffix for Markdown output — HTML
+# rendering ignores the flag, so `--compact --format html` is a silent
+# no-op on the filename (matching the CLI description that compact is
+# Markdown-only).
+
+VARIANT_ENTRY_RE = re.compile(r"^combined_transcripts((?:\.[a-z]+)*)\.html$")
+
+
+def variant_suffix(
+    detail: DetailLevel | str = DetailLevel.FULL,
+    compact: bool = False,
+    format: str = "html",
+) -> str:
+    """Compute the filename infix for a given render variant.
+
+    Returns the empty string for the default variant
+    (full detail, no compact). Otherwise returns a dot-prefixed
+    suffix that is inserted after the basename and before the page
+    number / extension.
+    """
+    # `DetailLevel` inherits from `str`, so `isinstance(detail, str)` is
+    # always True — narrow only on `DetailLevel` to coerce plain strings.
+    if not isinstance(detail, DetailLevel):
+        detail = DetailLevel(detail)
+    parts: list[str] = []
+    if detail != DetailLevel.FULL:
+        parts.append(detail.value)
+    # `--compact` is Markdown-only (merges consecutive same-category
+    # headings in the Markdown renderer). For HTML it's a no-op.
+    if compact and format in ("md", "markdown"):
+        parts.append("compact")
+    return "".join(f".{p}" for p in parts)
 
 
 def format_timestamp(timestamp_str: str | None) -> str:

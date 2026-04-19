@@ -602,13 +602,19 @@ class HtmlRenderer(Renderer):
         # Filter messages for this session (SummaryTranscriptEntry.sessionId is always None)
         session_messages = [msg for msg in messages if msg.sessionId == session_id]
 
-        # Get combined transcript link if cache manager is available
+        # Get combined transcript link if cache manager is available.
+        # The back-link must point at the combined file of the *same*
+        # variant this session is being rendered at — mixing variants
+        # would land the user on a different detail/compact rendering.
         combined_link = None
         if cache_manager is not None:
             try:
                 project_cache = cache_manager.get_cached_project_data()
                 if project_cache and project_cache.sessions:
-                    combined_link = "combined_transcripts.html"
+                    from ..utils import variant_suffix as _variant_suffix
+
+                    suffix = _variant_suffix(self.detail, self.compact, "html")
+                    combined_link = f"combined_transcripts{suffix}.html"
             except Exception:
                 pass
 

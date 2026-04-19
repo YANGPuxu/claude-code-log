@@ -1140,8 +1140,17 @@ class CacheManager:
 
         return row["page_size_config"] if row else None
 
-    def get_page_data(self, page_number: int) -> Optional[PageCacheData]:
-        """Get cache data for a specific page."""
+    def get_page_data(
+        self, page_number: int, variant_suffix: str = ""
+    ) -> Optional[PageCacheData]:
+        """Get cache data for a specific page.
+
+        Args:
+            page_number: Page number (1-indexed).
+            variant_suffix: Detail/compact variant infix (e.g. ``""``,
+                ``".low"``, ``".low.compact"``). Each variant has its
+                own pagination cache row.
+        """
         if self._project_id is None:
             return None
 
@@ -1149,8 +1158,9 @@ class CacheManager:
             # Get page info
             page_row = conn.execute(
                 """SELECT * FROM html_pages
-                   WHERE project_id = ? AND page_number = ?""",
-                (self._project_id, page_number),
+                   WHERE project_id = ? AND variant_suffix = ?
+                         AND page_number = ?""",
+                (self._project_id, variant_suffix, page_number),
             ).fetchone()
 
             if not page_row:
@@ -1247,8 +1257,16 @@ class CacheManager:
         total_output_tokens: int,
         total_cache_creation_tokens: int,
         total_cache_read_tokens: int,
+        variant_suffix: str = "",
     ) -> None:
-        """Update or insert page cache entry."""
+        """Update or insert page cache entry.
+
+        Args:
+            variant_suffix: Detail/compact variant infix (e.g. ``""``,
+                ``".low"``). Each variant owns its own cache row; the
+                UNIQUE constraint is on (project_id, variant_suffix,
+                page_number).
+        """
         if self._project_id is None or not session_ids:
             return
 
@@ -1256,13 +1274,14 @@ class CacheManager:
             # Insert or update page
             conn.execute(
                 """INSERT INTO html_pages
-                   (project_id, page_number, html_path, page_size_config, message_count,
+                   (project_id, variant_suffix, page_number, html_path,
+                    page_size_config, message_count,
                     first_session_id, last_session_id, first_timestamp, last_timestamp,
                     total_input_tokens, total_output_tokens,
                     total_cache_creation_tokens, total_cache_read_tokens,
                     generated_at, library_version)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(project_id, page_number)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(project_id, variant_suffix, page_number)
                    DO UPDATE SET
                        html_path = excluded.html_path,
                        page_size_config = excluded.page_size_config,
@@ -1279,6 +1298,7 @@ class CacheManager:
                        library_version = excluded.library_version""",
                 (
                     self._project_id,
+                    variant_suffix,
                     page_number,
                     html_path,
                     page_size_config,
@@ -1299,8 +1319,9 @@ class CacheManager:
             # Get the page ID
             row = conn.execute(
                 """SELECT id FROM html_pages
-                   WHERE project_id = ? AND page_number = ?""",
-                (self._project_id, page_number),
+                   WHERE project_id = ? AND variant_suffix = ?
+                         AND page_number = ?""",
+                (self._project_id, variant_suffix, page_number),
             ).fetchone()
             page_id = row["id"]
 
@@ -1318,13 +1339,18 @@ class CacheManager:
             conn.commit()
 
     def is_page_stale(
-        self, page_number: int, page_size_config: int
+        self,
+        page_number: int,
+        page_size_config: int,
+        variant_suffix: str = "",
     ) -> tuple[bool, str]:
         """Check if a page needs regeneration.
 
         Args:
-            page_number: The page number to check
-            page_size_config: The current page size configuration
+            page_number: The page number to check.
+            page_size_config: The current page size configuration.
+            variant_suffix: Detail/compact variant infix; each variant's
+                cache is checked independently.
 
         Returns:
             Tuple of (is_stale: bool, reason: str)
@@ -1334,7 +1360,7 @@ class CacheManager:
         if self._project_id is None:
             return True, "no_cache"
 
-        page_data = self.get_page_data(page_number)
+        page_data = self.get_page_data(page_number, variant_suffix)
         if page_data is None:
             return True, "not_cached"
 
@@ -1409,15 +1435,21 @@ class CacheManager:
 
         return html_paths
 
-    def get_page_count(self) -> int:
-        """Get the number of cached pages for this project."""
+    def get_page_count(self, variant_suffix: str = "") -> int:
+        """Get the number of cached pages for this project and variant.
+
+        Orphan-cleanup loops in the converter must pass the same
+        ``variant_suffix`` used for rendering, otherwise they'd count
+        pages across variants and delete live pages of another variant.
+        """
         if self._project_id is None:
             return 0
 
         with self._get_connection() as conn:
             row = conn.execute(
-                """SELECT COUNT(*) as cnt FROM html_pages WHERE project_id = ?""",
-                (self._project_id,),
+                """SELECT COUNT(*) as cnt FROM html_pages
+                   WHERE project_id = ? AND variant_suffix = ?""",
+                (self._project_id, variant_suffix),
             ).fetchone()
 
         return row["cnt"] if row else 0

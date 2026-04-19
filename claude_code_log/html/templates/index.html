@@ -68,6 +68,14 @@
                 <span class="transcript-link-hint">(← open combined transcript)</span>
                 {% endif %}
             </div>
+            {% if project.html_variants is defined and project.html_variants|length > 1 %}
+            <div class='project-variants'>
+                <span class="variant-hint">Variants:</span>
+                {% for variant in project.html_variants %}
+                <a class='variant-link' href='{{ variant.file }}'>{{ variant.label }}</a>
+                {% endfor %}
+            </div>
+            {% endif %}
             <div class='project-stats'>
                 <div class='stat'>📁 {{ project.jsonl_count }} transcript files</div>
                 <div class='stat'>💬 {{ project.message_count }} messages</div>

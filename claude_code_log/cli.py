@@ -528,7 +528,10 @@ def _clear_output_files(input_path: Path, all_projects: bool, file_ext: str) -> 
 @click.option(
     "--compact",
     is_flag=True,
-    help="Merge consecutive same-type headings in Markdown output.",
+    help=(
+        "Merge consecutive same-category headings in Markdown output. "
+        "Markdown-only — a no-op for HTML."
+    ),
 )
 @click.option(
     "--debug",
@@ -826,6 +829,9 @@ def main(
             page_size=page_size,
             detail=detail_level,
             compact=compact,
+            # User's `-o` path is a one-off export, not a cached artifact:
+            # don't occupy a cache slot keyed by an arbitrary destination.
+            update_cache=output is None,
         )
         if input_path.is_file():
             click.echo(f"Successfully converted {input_path} to {output_path}")

@@ -935,7 +935,15 @@ class MarkdownRenderer(Renderer):
     ) -> str:
         """Generate Markdown for a single session."""
         session_messages = [msg for msg in messages if msg.sessionId == session_id]
-        combined_link = "combined_transcripts.md" if cache_manager else None
+        # Back-link points at the same variant's combined file so users
+        # don't bounce between detail levels when navigating.
+        if cache_manager is not None:
+            from ..utils import variant_suffix as _variant_suffix
+
+            suffix = _variant_suffix(self.detail, self.compact, "md")
+            combined_link = f"combined_transcripts{suffix}.md"
+        else:
+            combined_link = None
         return self.generate(
             session_messages,
             title or f"Session {session_id[:8]}",
