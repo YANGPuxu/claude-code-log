@@ -208,6 +208,38 @@ def _collect_descendants(
             _collect_descendants(child, session_uuids, nodes, result)
 
 
+def _collect_agent_anchors(
+    uuid: str,
+    session_uuids: set[str],
+    nodes: dict[str, MessageNode],
+    max_depth: int = 20,
+) -> list[str]:
+    """Find UserTranscriptEntry descendants with an ``agentId`` set.
+
+    These entries anchor subagent sessions: the subagent's sidechain entries
+    list this UUID as their ``parentUuid``, and the session tree attaches the
+    subagent DAG-line at this UUID. When the stitch logic classifies a sibling
+    assistant subtree as dead-end, these anchors would otherwise be dropped;
+    surfacing them keeps the subagent attachments reachable.
+    """
+    anchors: list[str] = []
+    stack: list[tuple[str, int]] = [(uuid, 0)]
+    seen: set[str] = set()
+    while stack:
+        current, depth = stack.pop()
+        if current in seen or current not in session_uuids:
+            continue
+        seen.add(current)
+        if depth >= max_depth:
+            continue
+        entry = nodes[current].entry
+        if isinstance(entry, UserTranscriptEntry) and entry.agentId:
+            anchors.append(current)
+        for c in nodes[current].children_uuids:
+            stack.append((c, depth + 1))
+    return anchors
+
+
 def _is_subtree_dead_end(
     uuid: str,
     session_uuids: set[str],
@@ -354,8 +386,16 @@ def _stitch_tool_results(
         if not _is_subtree_dead_end(uc, session_uuids, nodes):
             return None
 
+    # Agent-anchor preservation: parallel `Task` tool_uses emit sibling
+    # tool_result anchors whose parent assistants are each other's dead-end
+    # subtree. Extracting anchors ensures their subagent sessions stay
+    # attached even when the continuation runs through an outer sibling.
+    extracted_anchors: list[str] = []
+    for ac in assistant_children:
+        extracted_anchors.extend(_collect_agent_anchors(ac, session_uuids, nodes))
+
     # Stitch: dead-end children first, then the continuing user child
-    dead_ends = user_dead + assistant_children
+    dead_ends = user_dead + assistant_children + extracted_anchors
     dead_ends.sort(key=lambda c: nodes[c].timestamp)
     return dead_ends + user_with_cont
 

@@ -42,6 +42,7 @@ uvx claude-code-log@latest --open-browser
 - **Rich Message Types**: Support for user/assistant messages, tool use/results, thinking content, images
 - **System Command Visibility**: Show system commands (like `init`) in expandable details with structured parsing
 - **Markdown Rendering**: Server-side markdown rendering with syntax highlighting using mistune
+- **Detail Levels & Compact Mode**: `--detail full|high|low|minimal` filters by verbosity and `--compact` merges repeated section headings — pairs well with `--format md` to feed past conversations back to an LLM for analysis or experience building
 - **Floating Navigation**: Always-available back-to-top button and filter controls
 - **CLI Interface**: Simple command-line tool using Click
 
@@ -57,6 +58,7 @@ This tool helps you answer questions like:
 - **"How can I share my Claude Code conversation with others?"**
 - **"What's the timeline of my project development?"**
 - **"How can I analyse patterns in my Claude Code usage?"**
+- **"How can I feed a past session back to an LLM for analysis or experience building?"**
 
 ## Usage
 
@@ -140,6 +142,27 @@ claude-code-log /path/to/directory --from-date "yesterday" --to-date "today"
 claude-code-log /path/to/directory --from-date "3 days ago" --to-date "yesterday"
 ```
 
+### Feeding Past Conversations to an LLM
+
+The combination `--detail low --format md --compact` produces condensed Markdown suitable as context for an LLM to review or distill patterns from past work:
+
+```bash
+# Session → compact Markdown for LLM review
+claude-code-log transcript.jsonl --detail low --format md --compact -o session.md
+
+# Whole project history
+claude-code-log /path/to/project --detail low --format md --compact
+```
+
+`--detail` levels (smallest → largest output):
+
+- `minimal` — user + assistant text only
+- `low` — interaction-focused; keeps WebSearch, WebFetch, and Task (agent delegations) as key signals
+- `high` — detailed but cleaned; drops system/hook noise
+- `full` — everything (default)
+
+`--compact` merges consecutive same-type sections in Markdown so runs of assistant responses share one heading instead of repeating `### 🤖 Assistant:` for each.
+
 ## Project Hierarchy Output
 
 When processing all projects, the tool generates:
@@ -204,6 +227,7 @@ Markdown export provides a lightweight, portable alternative to HTML:
 - **Code Preservation**: Syntax highlighting hints via fenced code blocks
 - **Embedded Viewer**: TUI includes built-in Markdown viewer with table of contents
 - **Image Support**: Configurable image handling (placeholder, embedded base64, or referenced files)
+- **`--compact` Mode**: Merge consecutive same-type section headings — most useful with `--detail low` or `minimal` where tool stripping creates runs of Assistant or User sections
 
 ## Installation
 

@@ -689,7 +689,7 @@ def render_params_table(params: dict[str, Any]) -> str:
                     preview = escape_html(formatted_value[:100]) + "..."
                     value_html = f"""
                         <details class='tool-param-collapsible'>
-                            <summary>{preview}</summary>
+                            <summary><span class='tool-param-preview'>{preview}</span></summary>
                             <pre class='tool-param-structured'>{escaped_value}</pre>
                         </details>
                     """
@@ -710,7 +710,7 @@ def render_params_table(params: dict[str, Any]) -> str:
                 preview = escape_html(str(value)[:80]) + "..."
                 value_html = f"""
                     <details class='tool-param-collapsible'>
-                        <summary>{preview}</summary>
+                        <summary><span class='tool-param-preview'>{preview}</span></summary>
                         <div class='tool-param-full'>{escaped_value}</div>
                     </details>
                 """

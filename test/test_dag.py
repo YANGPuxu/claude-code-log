@@ -1163,6 +1163,144 @@ class TestToolResultStitching:
         assert branch_count == 0
 
 
+def _with_agent_id(entry: dict, agent_id: str) -> dict:
+    """Attach an agentId to a user entry (marks it as a subagent anchor)."""
+    entry["agentId"] = agent_id
+    return entry
+
+
+class TestParallelAgentAnchorPreservation:
+    """Parallel Task/Agent tool_uses produce sibling tool_result anchors.
+
+    When the stitch logic classifies an assistant sibling subtree as
+    dead-end, any UserTranscriptEntry.agentId inside that subtree is the
+    attachment point for a subagent session. Those anchors must survive in
+    the main DAG-line or the subagent sessions can't be spliced in.
+    """
+
+    def test_inner_anchor_preserved_in_dead_end_subtree(self) -> None:
+        """Two parallel Agent tool_uses, inner anchor inside dead-end sibling.
+
+        Shape::
+
+            a → tool1 → tool2 → res2(agentId="agent-2")   [inner anchor]
+                     → res1(agentId="agent-1")
+                        → att1 → cont                    [main continues]
+
+        At the tool1 fork, variant 2 picks res1 as the continuation and
+        tool2 as the dead-end sibling. Without the fix, res2 gets collected
+        as a skipped descendant of tool2, breaking the agent-2 attachment.
+        """
+        data = [
+            _make_entry("user", "a", None, "2025-07-01T10:00:00.000Z"),
+            _make_entry("assistant", "tool1", "a", "2025-07-01T10:01:00.000Z"),
+            _make_entry("assistant", "tool2", "tool1", "2025-07-01T10:01:01.000Z"),
+            _with_agent_id(
+                _make_entry("user", "res2", "tool2", "2025-07-01T10:02:00.000Z"),
+                "agent-2",
+            ),
+            _with_agent_id(
+                _make_entry("user", "res1", "tool1", "2025-07-01T10:02:10.000Z"),
+                "agent-1",
+            ),
+            _make_attachment("att1", "res1", "2025-07-01T10:02:11.000Z"),
+            _make_entry("assistant", "cont", "att1", "2025-07-01T10:03:00.000Z"),
+        ]
+        entries = [create_transcript_entry(d) for d in data]
+        tree = build_dag_from_entries(entries)
+
+        # Both anchors must appear in the main DAG-line
+        uuids = tree.sessions["s1"].uuids
+        assert "res1" in uuids, "outer anchor dropped"
+        assert "res2" in uuids, "inner anchor (agent-2) dropped — fix regression"
+        # No spurious branches — stitch should produce one linear DAG-line
+        branch_count = sum(1 for s in tree.sessions.values() if s.is_branch)
+        assert branch_count == 0
+
+    def test_three_parallel_agents_all_anchors_preserved(self) -> None:
+        """Three parallel Agent tool_uses (the teammates shape).
+
+        Shape mirrors ``experiments/worktrees``: 3 chained Agent tool_uses
+        with tool_results that dead-end at each level, and the main chain
+        continues via an attachment after the outer tool_result.
+        """
+        data = [
+            _make_entry("user", "a", None, "2025-07-01T10:00:00.000Z"),
+            _make_entry("assistant", "tool1", "a", "2025-07-01T10:01:00.000Z"),
+            _make_entry("assistant", "tool2", "tool1", "2025-07-01T10:01:01.000Z"),
+            _make_entry("assistant", "tool3", "tool2", "2025-07-01T10:01:02.000Z"),
+            _with_agent_id(
+                _make_entry("user", "res3", "tool3", "2025-07-01T10:02:00.000Z"),
+                "agent-3",
+            ),
+            _with_agent_id(
+                _make_entry("user", "res2", "tool2", "2025-07-01T10:02:10.000Z"),
+                "agent-2",
+            ),
+            _with_agent_id(
+                _make_entry("user", "res1", "tool1", "2025-07-01T10:02:20.000Z"),
+                "agent-1",
+            ),
+            _make_attachment("att1", "res1", "2025-07-01T10:02:21.000Z"),
+            _make_entry("assistant", "cont", "att1", "2025-07-01T10:03:00.000Z"),
+        ]
+        entries = [create_transcript_entry(d) for d in data]
+        tree = build_dag_from_entries(entries)
+
+        uuids = set(tree.sessions["s1"].uuids)
+        missing = {"res1", "res2", "res3"} - uuids
+        assert not missing, f"anchors missing from main DAG-line: {missing}"
+
+    def test_anchor_attachment_routes_subagent_session(self) -> None:
+        """End-to-end: anchor-bearing tool_result enables subagent splice.
+
+        Builds main + a sidechain session whose entries use ``res2`` as the
+        anchor via ``parentUuid``. After the fix, ``traverse_session_tree``
+        must yield the subagent messages interleaved at the anchor point.
+        """
+        from claude_code_log.converter import _integrate_agent_entries
+
+        data = [
+            _make_entry("user", "a", None, "2025-07-01T10:00:00.000Z"),
+            _make_entry("assistant", "tool1", "a", "2025-07-01T10:01:00.000Z"),
+            _make_entry("assistant", "tool2", "tool1", "2025-07-01T10:01:01.000Z"),
+            _with_agent_id(
+                _make_entry("user", "res2", "tool2", "2025-07-01T10:02:00.000Z"),
+                "agent-2",
+            ),
+            _with_agent_id(
+                _make_entry("user", "res1", "tool1", "2025-07-01T10:02:10.000Z"),
+                "agent-1",
+            ),
+            _make_attachment("att1", "res1", "2025-07-01T10:02:11.000Z"),
+            _make_entry("assistant", "cont", "att1", "2025-07-01T10:03:00.000Z"),
+        ]
+        # Sidechain entries for agent-2 (parentUuid=None, will be reparented
+        # to the res2 anchor by _integrate_agent_entries).
+        sub = {
+            "type": "user",
+            "timestamp": "2025-07-01T10:02:05.000Z",
+            "parentUuid": None,
+            "isSidechain": True,
+            "agentId": "agent-2",
+            "userType": "human",
+            "cwd": "/tmp",
+            "sessionId": "s1",
+            "version": "1.0.0",
+            "uuid": "sub1",
+            "message": {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        }
+        data.append(sub)
+
+        entries = [create_transcript_entry(d) for d in data]
+        _integrate_agent_entries(entries)
+        tree = build_dag_from_entries(entries)
+        traversed_uuids = [getattr(e, "uuid", "") for e in traverse_session_tree(tree)]
+        assert "sub1" in traversed_uuids, (
+            "subagent entry not reached via anchor — agent session not spliced"
+        )
+
+
 class TestStructuralOnlyFork:
     """All-passthrough children should collapse instead of creating forks."""
 
