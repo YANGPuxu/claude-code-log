@@ -879,8 +879,16 @@ class TestAgentDagIntegration:
         assert "s1" in tree.roots
         assert agent_sids[0] not in tree.roots
 
-    def test_agent_no_session_header(self, tmp_path: Path) -> None:
-        """Agent sessions don't generate session headers in rendering."""
+    def test_agent_session_has_no_separate_header(self, tmp_path: Path) -> None:
+        """Subagent sessions are inlined under their trunk anchor; they do
+        not produce a standalone SessionHeaderMessage.
+
+        ``_integrate_agent_entries`` still stamps subagent entries with a
+        synthetic ``{main}#agent-{agent_id}`` sessionId so the DAG walker
+        gives each subagent its own DAG-line. ``_render_messages`` skips
+        the header for those, and ``_relocate_subagent_blocks`` splices
+        each subagent's chunks back next to its anchor.
+        """
         from claude_code_log.renderer import generate_template_messages
         from claude_code_log.models import SessionHeaderMessage
 
@@ -919,18 +927,18 @@ class TestAgentDagIntegration:
         _write_jsonl(tmp_path / "session.jsonl", main_entries + agent_entries)
 
         messages, session_tree = load_directory_transcripts(tmp_path, silent=True)
-        root_messages, session_nav, context = generate_template_messages(
+        _roots, _nav, context = generate_template_messages(
             messages, session_tree=session_tree
         )
 
-        # Only one session header (for the main session), not for the agent
-        headers = [
-            m for m in context.messages if isinstance(m.content, SessionHeaderMessage)
-        ]
-        assert len(headers) == 1
-        header_content = headers[0].content
-        assert isinstance(header_content, SessionHeaderMessage)
-        assert header_content.session_id == "s1"
+        # Only the main session header is produced; the subagent session
+        # has no header of its own.
+        header_session_ids = {
+            m.content.session_id
+            for m in context.messages
+            if isinstance(m.content, SessionHeaderMessage)
+        }
+        assert header_session_ids == {"s1"}
 
     def test_multiple_agents_ordered(self, tmp_path: Path) -> None:
         """Multiple agents are each placed at their respective anchor points."""

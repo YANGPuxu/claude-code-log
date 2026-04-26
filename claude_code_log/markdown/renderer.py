@@ -102,10 +102,36 @@ _COLOR_CIRCLE: dict[str, str] = {
 }
 
 
+def _inline_code(value: str) -> str:
+    """Wrap *value* in a CommonMark inline code span that survives backticks.
+
+    CommonMark doesn't honor backslash escapes inside code spans, so a
+    naive `` `foo`bar` `` would close the span at the inner tick. The
+    idiomatic recipe is to widen the fence past the longest run of
+    backticks in the value, and pad with a space when the value
+    starts/ends with a backtick (otherwise the leading/trailing tick
+    fuses with the fence).
+    """
+    if not value:
+        return "``"  # empty code span
+    longest = 0
+    run = 0
+    for ch in value:
+        if ch == "`":
+            run += 1
+            if run > longest:
+                longest = run
+        else:
+            run = 0
+    fence = "`" * (longest + 1)
+    pad = " " if value.startswith("`") or value.endswith("`") else ""
+    return f"{fence}{pad}{value}{pad}{fence}"
+
+
 def _teammate_marker(name: str, color: Optional[str]) -> str:
     """Return a `🟢 name` marker for a teammate in Markdown output."""
     circle = _COLOR_CIRCLE.get((color or "").lower(), _COLOR_CIRCLE["default"])
-    return f"{circle} `{name}`"
+    return f"{circle} {_inline_code(name)}"
 
 
 def _table_cell(value: Any) -> str:
@@ -344,12 +370,22 @@ class MarkdownRenderer(Renderer):
     def title_SessionHeaderMessage(
         self, content: SessionHeaderMessage, _: TemplateMessage
     ) -> str:
-        """Title → '📋 Session `abc12345`: summary'."""
-        # Return the title with session ID and optional summary
+        """Title → '📋 Session `abc12345`: summary — Team: `t`'."""
         session_short = content.session_id[:8]
         if content.summary:
-            return f"📋 Session `{session_short}`: {content.summary}"
-        return f"📋 Session `{session_short}`"
+            title = f"📋 Session `{session_short}`: {content.summary}"
+        else:
+            title = f"📋 Session `{session_short}`"
+        if content.team_name:
+            # Boundary hygiene: a malformed transcript could in theory
+            # carry a backtick in teamName. CommonMark code spans don't
+            # honor backslash escapes inside them — the idiomatic guard
+            # is to widen the fence beyond the longest run of backticks
+            # in the value (and pad with a space when it starts/ends
+            # with a backtick, otherwise the wider fence matches the
+            # leading/trailing tick).
+            title = f"{title} — Team: {_inline_code(content.team_name)}"
+        return title
 
     # -------------------------------------------------------------------------
     # User Content Formatters
@@ -1202,7 +1238,17 @@ class MarkdownRenderer(Renderer):
         session_tree: Optional["SessionTree"] = None,
     ) -> str:
         """Generate Markdown for a single session."""
-        session_messages = [msg for msg in messages if msg.sessionId == session_id]
+        # Include subagent entries whose sessionId was rewritten to
+        # ``{session_id}#agent-{agent_id}`` by ``_integrate_agent_entries``;
+        # otherwise per-session exports drop the inlined subagent
+        # conversation entirely (CodeRabbit on PR #125).
+        agent_prefix = f"{session_id}#agent-"
+        session_messages = [
+            msg
+            for msg in messages
+            if msg.sessionId == session_id
+            or (msg.sessionId or "").startswith(agent_prefix)
+        ]
         # Back-link points at the same variant's combined file so users
         # don't bounce between detail levels when navigating.
         if cache_manager is not None:

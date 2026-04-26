@@ -16,7 +16,8 @@ fragments styled by ``components/teammate_styles.css``.
 
 from __future__ import annotations
 
-from typing import Iterable, Optional
+import json
+from typing import Any, Iterable, Optional
 
 from ..models import (
     SendMessageInput,
@@ -36,7 +37,7 @@ from ..models import (
     TeammateMessage,
     TeammateMessageBlock,
 )
-from .utils import escape_html, render_markdown
+from .utils import escape_html, render_markdown, render_markdown_collapsible
 
 # Palette names the CSS recognises (kept in sync with teammate_styles.css).
 _PALETTE: frozenset[str] = frozenset(
@@ -170,7 +171,16 @@ def _format_teammate_block(
             f'<span class="teammate-summary">{escape_html(block.summary)}</span>'
         )
 
-    body_html = render_markdown(block.body) if block.body.strip() else ""
+    body_text = block.body.strip()
+    if not body_text:
+        body_html = ""
+    else:
+        # Some teammate notifications come through as JSON payloads
+        # (e.g. ``{"type":"idle_notification",...}``) rather than
+        # markdown prose. Render those as a compact key:value list so
+        # they read as data, not as a code blob.
+        json_html = _try_render_json_body(body_text)
+        body_html = json_html if json_html is not None else render_markdown(body_text)
 
     return (
         f'<div class="{class_attr}"{style}>'
@@ -178,6 +188,49 @@ def _format_teammate_block(
         f'<div class="teammate-body">{body_html}</div>'
         f"</div>"
     )
+
+
+def _try_render_json_body(text: str) -> Optional[str]:
+    """If *text* parses as a JSON object, render it as a key:value list.
+
+    Returns None when the body isn't JSON, isn't an object, or is too
+    nested to surface usefully — the caller falls back to Markdown.
+    Cheap pre-check (`{`/`}` framing) keeps the parser off the typical
+    Markdown path.
+    """
+    if not (text.startswith("{") and text.endswith("}")):
+        return None
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    parsed_dict: dict[str, Any] = parsed  # pyright: ignore[reportUnknownVariableType]
+    rows: list[str] = []
+    for key, value in parsed_dict.items():
+        rows.append(
+            f"<dt>{escape_html(str(key))}</dt><dd>{_format_json_scalar(value)}</dd>"
+        )
+    if not rows:
+        return None
+    return f'<dl class="teammate-json">{"".join(rows)}</dl>'
+
+
+def _format_json_scalar(value: Any) -> str:
+    """Render a JSON scalar (or nested structure) as inline HTML.
+
+    Strings get a ``<code>`` wrapper; other scalars are stringified.
+    Nested dicts/lists fall back to a compact JSON dump in a ``<code>``
+    so the output stays one-row-per-key.
+    """
+    if isinstance(value, str):
+        return f"<code>{escape_html(value)}</code>"
+    if isinstance(value, bool) or value is None:
+        return f"<code>{escape_html(str(value).lower() if value is not None else 'null')}</code>"
+    if isinstance(value, (int, float)):
+        return f"<code>{escape_html(str(value))}</code>"
+    return f"<code>{escape_html(json.dumps(value, separators=(', ', ': ')))}</code>"
 
 
 # ---------------------------------------------------------------------------
@@ -230,55 +283,105 @@ def format_teamdelete_output(
     return _render_card(css, rows)
 
 
+def _status_pill(status: str) -> str:
+    """Render a small-caps status pill with palette color (in_progress → blue,
+    completed → green, etc.).
+
+    Mirrors the TaskList row's ``.task-status`` styling so the same
+    ``IN PROGRESS`` rendering appears on TaskCreate / TaskUpdate cards.
+    Unknown statuses get the default gray.
+    """
+    status_class = f"status-{status}" if status in _STATUS_CLASSES else "status-unknown"
+    return f"<span class='task-status {status_class}'>{escape_html(status)}</span>"
+
+
 def format_taskcreate_input(input_: TaskCreateInput) -> str:
-    rows: list[tuple[str, str]] = [("Subject", escape_html(input_.subject))]
+    """Body for TaskCreate: combined activeForm + description as Markdown.
+
+    Subject moved to the tool-use title (``Task #N <subject> [created]``)
+    by ``HtmlRenderer.title_TaskCreateInput``. The remaining fields read
+    naturally as a single document: ``activeForm`` is a short
+    "in-progress" verb phrase ("Writing relay.py tests"), so it slots in
+    as a bold-italic heading; ``description`` is the body that may run
+    several paragraphs with lists and code spans. Stitching them with a
+    blank-line separator and routing through ``render_markdown_
+    collapsible`` produces a flowing document rather than two labeled
+    rows. Either field on its own degrades naturally.
+    """
+    parts: list[str] = []
     if input_.activeForm:
-        rows.append(("Active form", escape_html(input_.activeForm)))
+        parts.append(f"***{input_.activeForm}***")
     if input_.description:
-        rows.append(("Description", escape_html(input_.description)))
-    return _render_card("task-create-card", rows)
+        parts.append(input_.description)
+    if not parts:
+        return ""
+    return render_markdown_collapsible("\n\n".join(parts), "task-create-description")
 
 
-def format_taskcreate_output(output: TaskCreateOutput) -> str:
-    rows: list[tuple[str, str]] = [
-        ("Task ID", f"<code>#{escape_html(output.task_id)}</code>"),
-    ]
-    if output.subject:
-        rows.append(("Subject", escape_html(output.subject)))
-    return _render_card("task-create-output", rows)
+def format_taskcreate_output(_output: TaskCreateOutput) -> str:
+    """Tool result body: empty.
+
+    Task id + subject are surfaced via the tool-use title; no separate
+    result card is needed.
+    """
+    return ""
 
 
 def format_taskupdate_input(
     input_: TaskUpdateInput,
     teammate_colors: Optional[dict[str, str]] = None,
 ) -> str:
-    rows: list[tuple[str, str]] = [
-        ("Task", f"<code>#{escape_html(input_.taskId)}</code>"),
-    ]
-    if input_.status:
-        rows.append(("Status", escape_html(input_.status)))
+    """Body for TaskUpdate: ``Owner`` (badge) + ``Status`` (pill).
+
+    Task id moved to the tool-use title (``Task #N <subject> [updated]``)
+    by ``HtmlRenderer.title_TaskUpdateInput``. The status pill reuses
+    the TaskList palette (``in_progress`` → blue, etc.) for visual
+    consistency.
+    """
+    rows: list[tuple[str, str]] = []
     if input_.owner:
         color = _lookup_color(teammate_colors, input_.owner)
         rows.append(("Owner", _teammate_badge(input_.owner, color)))
+    if input_.status:
+        rows.append(("Status", _status_pill(input_.status)))
+    if not rows:
+        return ""
     return _render_card("task-update-card", rows)
 
 
 def format_taskupdate_output(output: TaskUpdateOutput) -> str:
-    rows: list[tuple[str, str]] = [
-        ("Task", f"<code>#{escape_html(output.task_id)}</code>"),
-        ("Status", "updated" if output.success else "not updated"),
-    ]
-    if output.updated_fields:
-        fields = ", ".join(escape_html(name) for name in output.updated_fields)
-        rows.append(("Fields", fields))
-    if output.status_change is not None and (
-        output.status_change.from_status or output.status_change.to_status
-    ):
-        from_s = escape_html(output.status_change.from_status or "?")
-        to_s = escape_html(output.status_change.to_status or "?")
-        rows.append(
-            ("Transition", f"{from_s}<span class='status-arrow'>→</span>{to_s}")
+    """Tool result body: empty unless there's something to surface.
+
+    Task id + ``[updated]`` come from the tool-use title; a bare
+    ``Status: updated`` row is redundant on success. But on failure
+    we MUST surface the negative outcome — otherwise the title alone
+    falsely claims success. ``from→to`` transitions are preserved when
+    present (information the title can't show).
+    """
+    if not output.success:
+        # Show whatever raw text the tool returned so the reader has
+        # something to dig into; fall back to a bare "failed" badge
+        # when the parser captured nothing useful.
+        rows: list[tuple[str, str]] = [
+            ("Status", "<code class='task-update-failed'>failed</code>")
+        ]
+        if output.raw_text:
+            rows.append(("Detail", escape_html(output.raw_text)))
+        return _render_card("task-update-card", rows)
+    if output.status_change is None:
+        return ""
+    from_s = output.status_change.from_status
+    to_s = output.status_change.to_status
+    if not (from_s or to_s):
+        return ""
+    rows = [
+        (
+            "Transition",
+            f"{_status_pill(from_s or '?')}"
+            f"<span class='status-arrow'>→</span>"
+            f"{_status_pill(to_s or '?')}",
         )
+    ]
     return _render_card("task-update-card", rows)
 
 
@@ -324,15 +427,23 @@ def format_sendmessage_input(
     input_: SendMessageInput,
     teammate_colors: Optional[dict[str, str]] = None,
 ) -> str:
-    rows: list[tuple[str, str]] = []
-    if input_.recipient:
-        color = _lookup_color(teammate_colors, input_.recipient)
-        rows.append(("To", _teammate_badge(input_.recipient, color)))
-    if input_.type:
-        rows.append(("Type", escape_html(input_.type)))
+    """Body for SendMessage: just the message content as markdown.
+
+    Recipient + ``To`` go in the title via
+    ``HtmlRenderer.title_SendMessageInput``. The ``type`` field is
+    almost always ``"message"`` and reads as noise; surfaced only when
+    it's something else (e.g. a future ``"signal"`` variant).
+    """
+    del teammate_colors  # recipient now goes in the title
+    parts: list[str] = []
+    if input_.type and input_.type != "message":
+        parts.append(
+            f'<div class="send-message-type">'
+            f"Type: <code>{escape_html(input_.type)}</code></div>"
+        )
     if input_.content:
-        rows.append(("Message", _quote_text_block(input_.content)))
-    return _render_card("send-message-card", rows)
+        parts.append(render_markdown_collapsible(input_.content, "send-message-body"))
+    return "".join(parts)
 
 
 def format_sendmessage_output(
@@ -431,11 +542,6 @@ def _render_card(css_class: str, rows: Iterable[tuple[str, str]]) -> str:
         f"<dt>{escape_html(label)}</dt><dd>{value}</dd>" for label, value in rows
     )
     return f'<dl class="teammate-tool-card {css_class}">{row_html}</dl>'
-
-
-def _quote_text_block(text: str) -> str:
-    """Render multi-line text inside a card cell without losing line breaks."""
-    return f"<pre class='teammate-text-block'>{escape_html(text)}</pre>"
 
 
 def _format_usage(

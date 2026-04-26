@@ -611,17 +611,19 @@ def _normalize_prompt(text: str) -> str:
 
 
 def _integrate_agent_entries(messages: list[TranscriptEntry]) -> None:
-    """Parent agent entries and assign synthetic session IDs.
+    """Parent subagent entries and stamp them with a per-agent session id.
 
-    Agent (sidechain) entries share sessionId with their parent session
-    but form separate conversation threads. This function:
-
-    1. Builds a map of agentId -> anchor UUID (the main-session User entry
-       whose agentId matches, i.e. the tool_result that references the agent)
-    2. For each agent's root entry (parentUuid=None, isSidechain=True),
-       sets parentUuid to the anchor UUID
-    3. Assigns a synthetic sessionId ("{sessionId}#agent-{agentId}") to all
-       agent entries so they form separate DAG-lines
+    Two adjustments per subagent:
+      1. Re-parent the sidechain root (parentUuid=None) to the trunk
+         tool_result that referenced this agentId — so the DAG threads
+         the subagent's conversation under its spawning Agent/Task call.
+      2. Rewrite ``sessionId`` for every sidechain entry of that agent
+         to ``{trunk}#agent-{agentId}``. Without this all subagents
+         share the trunk's sessionId, and ``_walk_session_with_forks``
+         folds subagent UUIDs into the trunk DAG-line — its anchor
+         logic then can't separate one subagent's content from another's.
+         The synthetic id splits each subagent into its own DAG-line that
+         attaches at the anchor uuid, rendering as a sub-session branch.
 
     Mutates entries in place (Pydantic v2 models are mutable by default).
     """
@@ -648,18 +650,15 @@ def _integrate_agent_entries(messages: list[TranscriptEntry]) -> None:
     if not agent_anchors:
         return
 
-    # Process sidechain entries: parent roots and assign synthetic sessionIds
     for msg in messages:
         if not isinstance(msg, (BaseTranscriptEntry, PassthroughTranscriptEntry)):
             continue
         if not msg.isSidechain or not msg.agentId:
             continue
         agent_id = msg.agentId
-        # Assign synthetic session ID to separate from main session
-        msg.sessionId = f"{msg.sessionId}#agent-{agent_id}"
-        # Parent the root entry to the anchor
         if msg.parentUuid is None and agent_id in agent_anchors:
             msg.parentUuid = agent_anchors[agent_id]
+        msg.sessionId = f"{msg.sessionId}#agent-{agent_id}"
 
 
 def load_directory_transcripts(
@@ -1065,12 +1064,20 @@ def _build_session_data_from_messages(
                 "total_output_tokens": 0,
                 "total_cache_creation_tokens": 0,
                 "total_cache_read_tokens": 0,
+                "team_name": None,
             }
 
         sessions[session_id]["message_count"] += 1
         current_timestamp = getattr(message, "timestamp", "")
         if current_timestamp:
             sessions[session_id]["last_timestamp"] = current_timestamp
+
+        # Capture the first non-None teamName seen in the session
+        # (teammates feature). Same shape as renderer.prepare_session_team_names.
+        if not sessions[session_id]["team_name"]:
+            tn = getattr(message, "teamName", None)
+            if tn:
+                sessions[session_id]["team_name"] = tn
 
         # Get first user message for preview
         if (
@@ -1117,6 +1124,7 @@ def _build_session_data_from_messages(
             total_output_tokens=data["total_output_tokens"],
             total_cache_creation_tokens=data["total_cache_creation_tokens"],
             total_cache_read_tokens=data["total_cache_read_tokens"],
+            team_name=data["team_name"],
         )
 
     return result
@@ -1739,6 +1747,12 @@ def _update_cache_with_session_data(
             current_timestamp = getattr(message, "timestamp", "")
             if current_timestamp:
                 session_cache.last_timestamp = current_timestamp
+
+            # Capture first non-None teamName per session (teammates feature).
+            if not session_cache.team_name:
+                tn = getattr(message, "teamName", None)
+                if tn:
+                    session_cache.team_name = tn
 
             # Get first user message for preview
             if (
@@ -2500,6 +2514,16 @@ def process_projects_hierarchy(
                                 if session_data.first_user_message
                                 and session_data.first_user_message != "Warmup"
                             ],
+                            # Distinct teamName values across this project's
+                            # sessions (teammates feature). Powers the
+                            # "Team: …" annotation on the project card.
+                            "team_names": sorted(
+                                {
+                                    s.team_name
+                                    for s in cached_project_data.sessions.values()
+                                    if s.team_name
+                                }
+                            ),
                         }
                     )
                     # Add project stats
@@ -2573,6 +2597,27 @@ def process_projects_hierarchy(
                         if usage.cache_read_input_tokens:
                             total_cache_read_tokens += usage.cache_read_input_tokens
 
+            # Distinct teamName values across this project's sessions.
+            # Mirror the cached path's filtering: skip warmup-only
+            # sessions, coalesce agent synthetic-sessionIds into their
+            # parent, and only consider non-summary entries (matches
+            # _collect_project_sessions / _update_cache_with_session_data
+            # so cached and no-cache paths produce the same annotation).
+            warmup_for_teams = get_warmup_session_ids(messages)
+            team_name_per_session: dict[str, str] = {}
+            for _msg in messages:
+                if isinstance(_msg, SummaryTranscriptEntry):
+                    continue
+                if not hasattr(_msg, "sessionId"):
+                    continue
+                _sid = get_parent_session_id(getattr(_msg, "sessionId", ""))
+                if not _sid or _sid in warmup_for_teams:
+                    continue
+                _tn = getattr(_msg, "teamName", None)
+                if _tn and _sid not in team_name_per_session:
+                    team_name_per_session[_sid] = _tn
+            team_names_set: set[str] = set(team_name_per_session.values())
+
             project_summaries.append(
                 {
                     "name": project_dir.name,
@@ -2595,6 +2640,7 @@ def process_projects_hierarchy(
                     else [],
                     "is_archived": False,
                     "sessions": sessions_data,
+                    "team_names": sorted(team_names_set),
                 }
             )
             # Track session count in stats for fallback path
@@ -2666,6 +2712,15 @@ def process_projects_hierarchy(
                         if session_data.first_user_message
                         and session_data.first_user_message != "Warmup"
                     ],
+                    # Distinct teamName values across this archived project's
+                    # cached sessions (teammates feature).
+                    "team_names": sorted(
+                        {
+                            s.team_name
+                            for s in cached_project_data.sessions.values()
+                            if s.team_name
+                        }
+                    ),
                 }
             )
         except Exception as e:

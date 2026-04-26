@@ -83,6 +83,13 @@ TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
     "Glob": GlobInput,
     "Grep": GrepInput,
     "Task": TaskInput,
+    # Claude Code's experimental teammates feature
+    # (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1) emits the spawn tool as
+    # ``Agent`` rather than ``Task`` and adds ``name``, ``isolation``,
+    # ``team_name`` etc. on top of TaskInput's fields. TaskInput already
+    # carries name / team_name / mode and Pydantic's default extra="ignore"
+    # accepts the rest cleanly, so aliasing is enough today.
+    "Agent": TaskInput,
     "TodoWrite": TodoWriteInput,
     "AskUserQuestion": AskUserQuestionInput,
     "ask_user_question": AskUserQuestionInput,  # Legacy tool name
@@ -918,6 +925,7 @@ TOOL_OUTPUT_PARSERS: dict[str, ToolOutputParser] = {
     "Write": parse_write_output,
     "Bash": parse_bash_output,
     "Task": parse_task_output,
+    "Agent": parse_task_output,  # Teammates spawn tool — same parse shape
     "AskUserQuestion": parse_askuserquestion_output,
     "ExitPlanMode": parse_exitplanmode_output,
     "WebSearch": parse_websearch_output,

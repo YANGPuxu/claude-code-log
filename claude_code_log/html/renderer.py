@@ -202,6 +202,18 @@ class HtmlRenderer(Renderer):
         # combined transcripts don't cross-contaminate teammate colors
         # between sessions.
         self._teammate_colors_by_session: dict[str, dict[str, str]] = {}
+        # session_id -> {task_id -> subject}, populated by
+        # `_populate_task_metadata` from TaskCreate/TaskList tool_results
+        # so TaskCreate / TaskUpdate tool_use titles can surface the
+        # human-readable subject. Empty for sessions without task
+        # activity.
+        self._task_subjects_by_session: dict[str, dict[str, str]] = {}
+        # session_id -> {tool_use_id -> task_id}, populated alongside
+        # task_subjects so the TaskCreate tool_use title can render the
+        # backend-assigned ``#N`` (TaskCreateInput itself doesn't carry
+        # the id; it's minted on creation and only appears on the
+        # tool_result).
+        self._task_id_by_tool_use: dict[str, dict[str, str]] = {}
 
     # -------------------------------------------------------------------------
     # Private Utility Methods
@@ -598,6 +610,74 @@ class HtmlRenderer(Renderer):
         """Title → '🌐 WebFetch <url>'."""
         return self._tool_title(message, "🌐", input.url)
 
+    def _task_title(
+        self, message: TemplateMessage, action: str, subject: str, task_id: str
+    ) -> str:
+        """Compose the compact ``Task #N <subject> [action]`` tool title.
+
+        Used by both TaskCreate (action="created") and TaskUpdate
+        (action="updated"). ``task_id`` is empty when unknown
+        (TaskCreate before its tool_result has been observed); the ``#N``
+        segment is then dropped. ``subject`` is escaped here, so callers
+        pass the raw value. The leading emoji comes from the template.
+        """
+        parts: list[str] = ["Task"]
+        if task_id:
+            parts.append(f"<code>#{escape_html(task_id)}</code>")
+        if subject:
+            parts.append(f"<span class='tool-summary'>{escape_html(subject)}</span>")
+        parts.append(f"<span class='task-action'>[{action}]</span>")
+        return " ".join(parts)
+
+    def title_TaskCreateInput(
+        self, input: TaskCreateInput, message: TemplateMessage
+    ) -> str:
+        """Title → 'Task #N <subject> [created]'.
+
+        ``#N`` resolves via the per-session ``tool_use_id → task_id`` map
+        populated from the matching TaskCreate tool_result; absent when
+        the result hasn't been loaded.
+        """
+        content = cast(ToolUseMessage, message.content)
+        sid = message.meta.session_id if message.meta else ""
+        task_id = self._task_id_by_tool_use.get(sid, {}).get(content.tool_use_id, "")
+        return self._task_title(message, "created", input.subject or "", task_id)
+
+    def title_TaskUpdateInput(
+        self, input: TaskUpdateInput, message: TemplateMessage
+    ) -> str:
+        """Title → 'Task #N <subject> [updated]'.
+
+        Subject resolves via the per-session ``task_id → subject`` map
+        populated from earlier TaskCreate tool_results (or TaskList
+        snapshots). Empty when not found — the title degrades to the
+        bare ``#N``.
+        """
+        sid = message.meta.session_id if message.meta else ""
+        subject = self._task_subjects_by_session.get(sid, {}).get(input.taskId, "")
+        return self._task_title(message, "updated", subject, input.taskId)
+
+    def title_SendMessageInput(
+        self, input: SendMessageInput, message: TemplateMessage
+    ) -> str:
+        """Title → '✉️ SendMessage to <recipient_badge>'.
+
+        The leading ✉️ replaces the default 🛠️ tool emoji (the template
+        suppresses the default when the title already starts with one).
+        Inlining the recipient frees the body to render the message
+        content directly as markdown.
+        """
+        # Re-use the formatter module's badge helper. The underscore is
+        # legacy intra-module convention; surfacing the title here is
+        # the only cross-module call.
+        from .teammate_formatter import _teammate_badge  # pyright: ignore[reportPrivateUsage]
+
+        if input.recipient:
+            color = self._colors_for(message).get(input.recipient)
+            badge = _teammate_badge(input.recipient, color)
+            return f"✉️ SendMessage <span class='tool-summary'>to {badge}</span>"
+        return "✉️ SendMessage"
+
     def _flatten_preorder(
         self, roots: list[TemplateMessage]
     ) -> list[Tuple[TemplateMessage, str, str, str]]:
@@ -623,13 +703,45 @@ class HtmlRenderer(Renderer):
         set_timing_var("_markdown_timings", markdown_timings)
         set_timing_var("_pygments_timings", pygments_timings)
 
+        # Build index_map so we can clear stranded `pair_first` flags
+        # when their partner tool_result gets skipped (see suppression
+        # logic in visit()).
+        index_map: dict[int, TemplateMessage] = {}
+
+        def index_tree(msg: TemplateMessage) -> None:
+            if msg.message_index is not None:
+                index_map[msg.message_index] = msg
+            for child in msg.children:
+                index_tree(child)
+
+        for root in roots:
+            index_tree(root)
+
         def visit(msg: TemplateMessage) -> None:
             # Update current message ID for timing tracking
             set_timing_var("_current_msg_id", msg.message_id)
             title = self.title_content(msg)
             html = self.format_content(msg)
             formatted_ts = format_timestamp(msg.meta.timestamp if msg.meta else None)
-            flat.append((msg, title, html, formatted_ts))
+            # Skip messages with nothing to show — e.g. TaskCreate /
+            # TaskUpdate tool_results whose output formatter returns "".
+            # Without this they render as a bare timestamp-only card.
+            # Children still render at the same flat-list level since
+            # the recursion below is unconditional.
+            if title or html or msg.children:
+                flat.append((msg, title, html, formatted_ts))
+            else:
+                # Skipped message: if it's the second half of a pair
+                # (msg.pair_first → first message's index), clear the
+                # first half's `pair_last` so it loses its `pair_first`
+                # CSS class. Otherwise the surviving tool_use renders
+                # with a flat bottom border and no margin, expecting a
+                # companion that never arrives.
+                if msg.pair_first is not None:
+                    partner = index_map.get(msg.pair_first)
+                    if partner is not None:
+                        partner.pair_last = None
+                        partner.pair_duration = None
             for child in msg.children:
                 visit(child)
 
@@ -689,6 +801,12 @@ class HtmlRenderer(Renderer):
         self._teammate_colors_by_session = {
             sid: dict(colors) for sid, colors in ctx.teammate_colors.items()
         }
+        self._task_subjects_by_session = {
+            sid: dict(subjects) for sid, subjects in ctx.task_subjects.items()
+        }
+        self._task_id_by_tool_use = {
+            sid: dict(ids) for sid, ids in ctx.task_id_for_tool_use.items()
+        }
 
         # Flatten tree via pre-order traversal, formatting content along the way
         with log_timing("Content formatting (pre-order)", t_start):
@@ -729,8 +847,18 @@ class HtmlRenderer(Renderer):
         session_tree: Optional["SessionTree"] = None,
     ) -> str:
         """Generate HTML for a single session."""
-        # Filter messages for this session (SummaryTranscriptEntry.sessionId is always None)
-        session_messages = [msg for msg in messages if msg.sessionId == session_id]
+        # Filter messages for this session (SummaryTranscriptEntry.sessionId is always None).
+        # Also accept entries whose sessionId was rewritten to
+        # ``{session_id}#agent-{agent_id}`` by ``_integrate_agent_entries``;
+        # otherwise per-session exports drop the inlined subagent
+        # conversation (CodeRabbit on PR #125).
+        agent_prefix = f"{session_id}#agent-"
+        session_messages = [
+            msg
+            for msg in messages
+            if msg.sessionId == session_id
+            or (msg.sessionId or "").startswith(agent_prefix)
+        ]
 
         # Get combined transcript link if cache manager is available.
         # The back-link must point at the combined file of the *same*

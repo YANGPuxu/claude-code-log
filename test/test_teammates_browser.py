@@ -14,16 +14,14 @@ from typing import List
 import pytest
 from playwright.sync_api import Page
 
-from claude_code_log.converter import load_transcript
+from claude_code_log.converter import load_directory_transcripts
 from claude_code_log.html.renderer import generate_html
-from claude_code_log.models import TranscriptEntry
 
 
 pytestmark = pytest.mark.browser
 
 
 FIXTURE_DIR = Path(__file__).parent / "test_data" / "teammates"
-MAIN_JSONL = FIXTURE_DIR / "ef000000-0000-4000-8000-000000000001.jsonl"
 
 
 class TestTeammatesBrowser:
@@ -40,8 +38,13 @@ class TestTeammatesBrowser:
                 pass
 
     def _render(self) -> Path:
-        messages: List[TranscriptEntry] = load_transcript(MAIN_JSONL)
-        html = generate_html(messages, "Teammates Fixture")
+        # Use load_directory_transcripts so _integrate_agent_entries
+        # runs and assigns synthetic sessionIds — the path that creates
+        # the subagent session boundaries the rendering depends on.
+        messages, session_tree = load_directory_transcripts(
+            FIXTURE_DIR, cache_manager=None, silent=True
+        )
+        html = generate_html(messages, "Teammates Fixture", session_tree=session_tree)
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".html", delete=False, encoding="utf-8"
         ) as f:
@@ -100,6 +103,32 @@ class TestTeammatesBrowser:
         # Header labels present in the DOM (content may be folded)
         assert table.locator("thead th", has_text="Status").count() == 1
         assert table.locator("thead th", has_text="Owner").count() == 1
+
+    def test_subagent_content_inlined_under_anchor(self, page: Page) -> None:
+        """Subagent content is inlined under its spawning Task/Agent
+        tool_result, not wrapped in a separate `<details>` block.
+
+        The post-merge refactor (commits ``27e43fb`` / ``fdd28ec``)
+        dropped the `<details class="subagent-session-block">` wrap and
+        the standalone subagent session header. Each subagent's
+        sidechain assistant rows must now render directly in the
+        document, threaded under their respective trunk anchors via
+        ``_relocate_subagent_blocks``.
+        """
+        page.goto(f"file://{self._render()}")
+
+        # The legacy collapse markup must be gone.
+        assert page.locator("details.subagent-session-block").count() == 0
+        assert page.locator(".session-teammate-badge").count() == 0
+
+        # The fixture has alice + bob subagents; their sidechain
+        # assistant rows should be present and visible without any
+        # expand action.
+        sidechain_assistants = page.locator(".message.assistant.sidechain")
+        assert sidechain_assistants.count() >= 2, (
+            "expected ≥2 subagent assistant rows inlined; got "
+            f"{sidechain_assistants.count()}"
+        )
 
     def test_teammate_badge_color_matches_teammate_id(self, page: Page) -> None:
         """The alice badge carries the blue token (via inline --cc-color).

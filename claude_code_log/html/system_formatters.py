@@ -78,6 +78,21 @@ def format_hook_summary_content(content: HookSummaryMessage) -> str:
 </details>"""
 
 
+def _team_badge(team_name: str) -> str:
+    """Render a colored 'Team: …' pill for the session header (teammates feature).
+
+    Picks the team-card palette token (`--cc-purple`) so the badge reads as
+    structurally related to the TeamCreate cards from PR #122.
+    """
+    return (
+        f'<span class="session-team-badge" '
+        f'style="--cc-color: var(--cc-purple); '
+        f'--cc-color-bg: var(--cc-purple-bg);">'
+        f'<span class="session-team-icon">👥</span>Team: '
+        f"{html.escape(team_name)}</span>"
+    )
+
+
 def format_session_header_content(content: SessionHeaderMessage) -> str:
     """Format a session header as HTML.
 
@@ -88,6 +103,7 @@ def format_session_header_content(content: SessionHeaderMessage) -> str:
         HTML for the session header display
     """
     escaped_title = html.escape(content.title)
+    badges = _team_badge(content.team_name) if content.team_name else ""
     if content.is_branch and content.parent_message_index is not None:
         # Branch header: compact with back-reference to fork point
         # Show session info for cross-session branches (different real session)
@@ -115,7 +131,7 @@ def format_session_header_content(content: SessionHeaderMessage) -> str:
                 f'class="branch-backlink">'
                 f"&#x2442; Fork point</a></div>"
             )
-        return f"{escaped_title}{session_info}{fork_backref}"
+        return f"{escaped_title}{badges}{session_info}{fork_backref}"
     if content.parent_session_id:
         parent_label = content.parent_session_summary or content.parent_session_id[:8]
         escaped_parent = html.escape(parent_label)
@@ -130,8 +146,8 @@ def format_session_header_content(content: SessionHeaderMessage) -> str:
                 f'<span class="session-backlink">&#x21b3; continues from '
                 f"{escaped_parent}</span>"
             )
-        return f"{link}{escaped_title}"
-    return escaped_title
+        return f"{link}{escaped_title}{badges}"
+    return f"{escaped_title}{badges}"
 
 
 __all__ = [

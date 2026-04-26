@@ -107,6 +107,24 @@
     margin-bottom: 0;
 }
 
+/* JSON-shaped teammate notifications (e.g. idle_notification payloads)
+   render as a compact key:value list rather than a code blob. */
+.teammate-body .teammate-json {
+    display: grid;
+    grid-template-columns: max-content auto;
+    gap: 0.15em 0.6em;
+    margin: 0;
+}
+
+.teammate-body .teammate-json dt {
+    color: var(--cc-gray);
+    font-weight: 600;
+}
+
+.teammate-body .teammate-json dd {
+    margin: 0;
+}
+
 /* System teammate messages (teammate_id="system") render with a neutral
    palette and an italicized body to signal out-of-band notifications
    (teammate_terminated, etc.). */
@@ -158,37 +176,49 @@
 
 .task-list .task-status {
     width: 7em;
-    white-space: nowrap;
-    font-variant: small-caps;
-    letter-spacing: 0.02em;
 }
 
 .task-list .task-owner .teammate-badge {
     font-size: 0.75em;
 }
 
-/* Status badges on the task-board row reuse the CC palette when we can
-   map a standard status to a color; default is gray. */
-.task-list .task-status.status-completed {
+/* Status badges reuse the CC palette when we can map a standard status
+   to a color; default is gray. Applies to TaskList rows and to the
+   TaskCreate / TaskUpdate cards' inline status pills. */
+.task-status {
+    white-space: nowrap;
+    font-variant: small-caps;
+    letter-spacing: 0.02em;
+}
+
+.task-status.status-completed {
     color: var(--cc-green);
 }
 
-.task-list .task-status.status-in_progress {
+.task-status.status-in_progress {
     color: var(--cc-blue);
 }
 
-.task-list .task-status.status-pending {
+.task-status.status-pending {
     color: var(--cc-gray);
 }
 
-.task-list .task-status.status-blocked {
+.task-status.status-blocked {
     color: var(--cc-red);
 }
 
-.task-list .task-status.status-deleted {
+.task-status.status-deleted {
     color: var(--cc-gray);
     text-decoration: line-through;
     opacity: 0.7;
+}
+
+/* `[created]` / `[updated]` action tag in the TaskCreate / TaskUpdate
+   tool-use titles. Muted so the subject reads as the primary content. */
+.task-action {
+    color: var(--cc-gray);
+    font-size: 0.85em;
+    font-weight: 500;
 }
 
 /* ----------------------------------------------------------------------
@@ -237,6 +267,11 @@
     opacity: 0.6;
 }
 
+.teammate-tool-card.task-update-card .task-update-failed {
+    color: var(--cc-red);
+    font-weight: 600;
+}
+
 .teammate-tool-card.send-message-card {
     --cc-color: var(--cc-orange);
 
@@ -245,4 +280,30 @@
 
 .teammate-tool-card.send-message-card .recipient .teammate-badge {
     font-size: 0.8em;
+}
+
+/* ----------------------------------------------------------------------
+   Session header team badge (teammates feature).
+   .session-team-badge surfaces a session's `teamName` next to the title.
+   ---------------------------------------------------------------------- */
+.session-team-badge {
+    --cc-color: var(--cc-purple);
+    --cc-color-bg: var(--cc-purple-bg);
+
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3em;
+    margin-left: 0.6em;
+    padding: 0.1em 0.55em;
+    border-radius: 999px;
+    background: var(--cc-color-bg);
+    color: var(--cc-color);
+    font-size: 0.78em;
+    font-weight: 600;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+
+.session-team-icon {
+    font-size: 0.95em;
 }

@@ -14,11 +14,17 @@ from .models import (
     TranscriptEntry,
     SummaryTranscriptEntry,
     QueueOperationTranscriptEntry,
+    ToolUseContent,
     UserTranscriptEntry,
     AssistantTranscriptEntry,
     PassthroughTranscriptEntry,
     SystemTranscriptEntry,
 )
+
+# Tool names whose ``tool_use`` block spawns a subagent thread. Used by
+# ``_collect_agent_anchors`` to keep nested-Agent assistant entries from
+# being swept up as silent dead-end skips.
+_SPAWN_TOOL_NAMES: frozenset[str] = frozenset({"Task", "Agent"})
 
 logger = logging.getLogger(__name__)
 
@@ -214,13 +220,27 @@ def _collect_agent_anchors(
     nodes: dict[str, MessageNode],
     max_depth: int = 20,
 ) -> list[str]:
-    """Find UserTranscriptEntry descendants with an ``agentId`` set.
+    """Find spawn-related descendants worth lifting back into the chain.
 
-    These entries anchor subagent sessions: the subagent's sidechain entries
-    list this UUID as their ``parentUuid``, and the session tree attaches the
-    subagent DAG-line at this UUID. When the stitch logic classifies a sibling
-    assistant subtree as dead-end, these anchors would otherwise be dropped;
-    surfacing them keeps the subagent attachments reachable.
+    Two kinds of "anchors" are surfaced:
+
+    1. ``UserTranscriptEntry`` with an ``agentId`` set — the trunk
+       tool_results that anchor subagent sessions: the subagent's
+       sidechain entries list this UUID as their ``parentUuid``, and
+       the session tree attaches the subagent DAG-line here.
+    2. ``AssistantTranscriptEntry`` whose ``message.content`` carries a
+       ``Task`` or ``Agent`` tool_use block — i.e. a spawning
+       assistant in a nested-Agent chain. Without this, a fork point
+       higher up classifies the whole nested-Agent subtree as dead-end
+       and its inner spawning assistants get dropped, hiding every
+       nested Agent invocation from the rendered transcript (concrete
+       repro: the wave-1/wave-2 carol agents in the experiments-
+       worktrees fixture).
+
+    When the stitch logic classifies a sibling subtree as dead-end,
+    these anchors would otherwise be dropped; surfacing them keeps
+    both the subagent attachments AND the spawning tool_use cards
+    reachable.
     """
     anchors: list[str] = []
     stack: list[tuple[str, int]] = [(uuid, 0)]
@@ -234,6 +254,11 @@ def _collect_agent_anchors(
             continue
         entry = nodes[current].entry
         if isinstance(entry, UserTranscriptEntry) and entry.agentId:
+            anchors.append(current)
+        elif isinstance(entry, AssistantTranscriptEntry) and any(
+            isinstance(item, ToolUseContent) and item.name in _SPAWN_TOOL_NAMES
+            for item in entry.message.content
+        ):
             anchors.append(current)
         for c in nodes[current].children_uuids:
             stack.append((c, depth + 1))
@@ -390,12 +415,23 @@ def _stitch_tool_results(
     # tool_result anchors whose parent assistants are each other's dead-end
     # subtree. Extracting anchors ensures their subagent sessions stay
     # attached even when the continuation runs through an outer sibling.
+    # Also surfaces nested-spawn assistants so their Agent tool_use cards
+    # don't disappear from the trunk view.
     extracted_anchors: list[str] = []
     for ac in assistant_children:
         extracted_anchors.extend(_collect_agent_anchors(ac, session_uuids, nodes))
 
-    # Stitch: dead-end children first, then the continuing user child
-    dead_ends = user_dead + assistant_children + extracted_anchors
+    # Stitch: dead-end children first, then the continuing user child.
+    # Dedup: the assistant_children already cover their own roots; the
+    # anchor collector also returns those when they carry spawn tool_use
+    # blocks, so a plain concatenation would emit them twice.
+    seen: set[str] = set()
+    dead_ends: list[str] = []
+    for uuid in user_dead + assistant_children + extracted_anchors:
+        if uuid in seen:
+            continue
+        seen.add(uuid)
+        dead_ends.append(uuid)
     dead_ends.sort(key=lambda c: nodes[c].timestamp)
     return dead_ends + user_with_cont
 

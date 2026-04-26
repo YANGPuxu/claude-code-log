@@ -146,10 +146,10 @@ Determines the hierarchy level for a message based on its CSS class and sidechai
 | Level | Message Types | Description |
 |-------|---------------|-------------|
 | 0 | `session-header` | Session dividers |
-| 1 | `user` | User messages (top-level conversation) |
+| 1 | `user`, `teammate` | User messages (top-level conversation), including TeammateMessage entries |
 | 2 | `assistant`, `thinking`, `system` (commands/errors) | Direct responses to user |
 | 3 | `tool_use`, `tool_result`, `system-info`, `system-warning` | Nested under assistant |
-| 4 | `assistant sidechain`, `thinking sidechain` | Sub-agent responses (from Task tool) |
+| 4 | `user`/`teammate`/`assistant`/`thinking` (sidechain) | Sub-agent responses (from Task tool); also the team-lead's wrapped prompt to a teammate |
 | 5 | `tool_use sidechain`, `tool_result sidechain` | Sub-agent tools |
 
 **Decision Logic:**
@@ -157,7 +157,8 @@ Determines the hierarchy level for a message based on its CSS class and sidechai
 ```
 css_class contains?    is_sidechain?    Result
 ────────────────────   ──────────────   ──────
-"user"                 false            Level 1
+"user" or "teammate"   false            Level 1
+"user" or "teammate"   true             Level 4
 "system-info/warning"  false            Level 3
 "system"               false            Level 2
 "assistant/thinking"   true             Level 4
@@ -168,9 +169,10 @@ css_class contains?    is_sidechain?    Result
 ```
 
 **Edge Cases:**
-- Sidechain user messages are skipped entirely (they duplicate Task tool input)
-- `system-info` and `system-warning` are at level 3 (tool-related notifications)
-- `system` (commands/errors) without info/warning are at level 2
+- Plain sidechain user messages that duplicate the Task input prompt (`UserTextMessage` content matching the spawning Task's prompt) get pruned by `_cleanup_sidechain_duplicates` *after* the tree is built — they still go through the level dispatch first.
+- `TeammateMessage`-shaped sidechain users (the team-lead's wrapped prompt) are kept visible and slot in at Level 4 alongside other sidechain user/assistant content; the dedup pass intentionally doesn't touch them.
+- `system-info` and `system-warning` are at level 3 (tool-related notifications).
+- `system` (commands/errors) without info/warning are at level 2.
 
 ### `_build_message_hierarchy(messages) -> None`
 
@@ -255,10 +257,10 @@ ancestry.forEach(ancestorId => {
 Messages from Task tool sub-agents are handled specially:
 
 1. **Identification**: `isSidechain: true` in JSONL → `sidechain` in css_class
-2. **Level assignment**: Sidechain assistant/thinking at level 4, tools at level 5
-3. **Reordering**: Sidechain messages appear under their Task tool result
-4. **Skipping**: Sidechain user messages are skipped (duplicate Task input)
-5. **Deduplication**: Identical sidechain results are replaced with links
+2. **Level assignment**: Sidechain `user`/`teammate`/`assistant`/`thinking` at level 4, sidechain tools at level 5
+3. **Reordering**: Sidechain messages appear under their Task/Agent tool_result via `_relocate_subagent_blocks`
+4. **First-prompt dedup**: After tree build, `_cleanup_sidechain_duplicates` prunes the first sidechain `UserTextMessage` when it duplicates the spawning Task's prompt. `TeammateMessage`-shaped sidechain prompts (the team-lead's wrapped prompt) are intentionally kept visible — they go through the level dispatch normally.
+5. **Last-response dedup**: Identical trailing sidechain assistant results are replaced with links to the Task tool_result that already shows the same text.
 
 ### Paired Message Handling
 

@@ -56,6 +56,9 @@ class SessionCacheData(BaseModel):
     total_output_tokens: int = 0
     total_cache_creation_tokens: int = 0
     total_cache_read_tokens: int = 0
+    # Teammates feature — set when the session was active in a team.
+    # First non-None ``teamName`` of any entry in the session.
+    team_name: Optional[str] = None
 
 
 class HtmlCacheEntry(BaseModel):
@@ -597,8 +600,9 @@ class CacheManager:
                         project_id, session_id, summary, first_timestamp, last_timestamp,
                         message_count, first_user_message, cwd,
                         total_input_tokens, total_output_tokens,
-                        total_cache_creation_tokens, total_cache_read_tokens
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        total_cache_creation_tokens, total_cache_read_tokens,
+                        team_name
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(project_id, session_id) DO UPDATE SET
                         summary = excluded.summary,
                         first_timestamp = excluded.first_timestamp,
@@ -609,7 +613,8 @@ class CacheManager:
                         total_input_tokens = excluded.total_input_tokens,
                         total_output_tokens = excluded.total_output_tokens,
                         total_cache_creation_tokens = excluded.total_cache_creation_tokens,
-                        total_cache_read_tokens = excluded.total_cache_read_tokens
+                        total_cache_read_tokens = excluded.total_cache_read_tokens,
+                        team_name = excluded.team_name
                     """,
                     (
                         self._project_id,
@@ -624,6 +629,7 @@ class CacheManager:
                         data.total_output_tokens,
                         data.total_cache_creation_tokens,
                         data.total_cache_read_tokens,
+                        data.team_name,
                     ),
                 )
 
@@ -751,6 +757,7 @@ class CacheManager:
                     total_output_tokens=row["total_output_tokens"],
                     total_cache_creation_tokens=row["total_cache_creation_tokens"],
                     total_cache_read_tokens=row["total_cache_read_tokens"],
+                    team_name=row["team_name"] if "team_name" in row.keys() else None,
                 )
 
         return ProjectCache(
@@ -1068,6 +1075,9 @@ class CacheManager:
                         total_output_tokens=row["total_output_tokens"],
                         total_cache_creation_tokens=row["total_cache_creation_tokens"],
                         total_cache_read_tokens=row["total_cache_read_tokens"],
+                        team_name=row["team_name"]
+                        if "team_name" in row.keys()
+                        else None,
                     )
 
         return archived_sessions

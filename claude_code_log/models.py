@@ -758,6 +758,9 @@ class SessionHeaderMessage(MessageContent):
     is_branch: bool = False  # True for within-session fork branches
     original_session_id: Optional[str] = None  # Original session_id before fork split
     first_uuid: Optional[str] = None  # First UUID in this branch (for forward links)
+    # Teammates feature — set when the session was active in a team. Sourced
+    # from the first non-None ``teamName`` of any entry in the session.
+    team_name: Optional[str] = None
 
     @property
     def message_type(self) -> str:

@@ -160,7 +160,7 @@
   
   <a id="session-ef000000"></a>
   
-  # 📋 Session `ef000000`
+  # 📋 Session `ef000000` — Team: `test-coverage`
   
   ## 🤷 User: *Start a test-coverage team and dispatch two…*
   
@@ -236,17 +236,17 @@
   > Server tests added. Coverage 22% → 88%.
   </details>
   
-  ## Teammate
+  #### Teammate
   
   🟦 **team-lead** · *task spawn*
   
   > You are **bob**, a teammate in the test-coverage team. Add unit tests for the server module and report back.
   
-  ### 🔗 Sub-assistant: *Starting server coverage work.*
+  #### 🔗 Sub-assistant: *Starting server coverage work.*
   
   > Starting server coverage work.
   
-  ### 🔗 Sub-assistant: *Server module coverage is now 88%.*
+  #### 🔗 Sub-assistant: *Server module coverage is now 88%.*
   
   > Server module coverage is now 88%.
   

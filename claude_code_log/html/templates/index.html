@@ -87,6 +87,13 @@
                 {% if project.token_summary %}
                 <div class='stat'>🪙 {{ project.token_summary }}</div>
                 {% endif %}
+                {% if project.team_names %}
+                <div class='stat project-teams'>
+                    👥 {% if project.team_names|length == 1 %}Team: <code>{{ project.team_names[0] }}</code>{% else %}Teams ({{ project.team_names|length }}):
+                        {%- for team in project.team_names %} <code>{{ team }}</code>{%- if not loop.last %},{% endif %}{%- endfor %}
+                    {% endif %}
+                </div>
+                {% endif %}
             </div>
 
             {% if project.sessions and project.sessions|length > 0 %}

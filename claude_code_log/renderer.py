@@ -122,6 +122,23 @@ class RenderingContext:
     teammate_colors: dict[str, dict[str, str]] = field(
         default_factory=lambda: {}  # type: dict[str, dict[str, str]]
     )
+    # Per-session map of TaskCreate-assigned task_id → subject. Lets the
+    # TaskUpdate tool_use title surface the human-readable subject of a
+    # task that was created earlier in the same session, since
+    # TaskUpdateInput only carries the bare ``taskId``. Populated by
+    # ``_populate_task_metadata`` from TaskCreate tool_results (and from
+    # TaskList rows as a fallback). Session-scoped for the same reason
+    # as ``teammate_colors``.
+    task_subjects: dict[str, dict[str, str]] = field(
+        default_factory=lambda: {}  # type: dict[str, dict[str, str]]
+    )
+    # Per-session map of tool_use_id → task_id, populated from TaskCreate
+    # tool_results. Used by the TaskCreate tool_use title formatter to
+    # display the assigned ``#N`` next to the subject (TaskCreateInput
+    # itself doesn't know the id; the backend mints it on creation).
+    task_id_for_tool_use: dict[str, dict[str, str]] = field(
+        default_factory=lambda: {}  # type: dict[str, dict[str, str]]
+    )
 
     def register(self, message: "TemplateMessage") -> int:
         """Register a TemplateMessage and assign its message_index.
@@ -444,6 +461,10 @@ class TemplateProject:
         self.earliest_timestamp = project_data.get("earliest_timestamp", "")
         self.sessions = project_data.get("sessions", [])
         self.working_directories = project_data.get("working_directories", [])
+        # Teammates feature — distinct team names across this project's
+        # sessions. Computed in get_all_cached_projects from each
+        # SessionCacheData.team_name.
+        self.team_names: list[str] = sorted(project_data.get("team_names", []))
 
         # Format display name using shared logic
         self.display_name = get_project_display_name(
@@ -625,6 +646,11 @@ def generate_template_messages(
     with log_timing("Session summary processing", t_start):
         session_summaries = prepare_session_summaries(messages)
 
+    # Pre-process: collect teamName per session (teammates feature) so
+    # session headers can surface a team badge without re-scanning later.
+    with log_timing("Session team-name processing", t_start):
+        session_team_names = prepare_session_team_names(messages)
+
     # Extract session hierarchy from DAG (reuse pre-built tree when available)
     with log_timing("Extract session hierarchy", t_start):
         session_hierarchy, junction_targets = _extract_session_hierarchy(
@@ -657,6 +683,7 @@ def generate_template_messages(
             show_tokens_for_message,
             session_hierarchy,
             session_summaries,
+            session_team_names,
             junction_targets,
         )
 
@@ -731,6 +758,13 @@ def generate_template_messages(
     with log_timing("Reorder paired messages", t_start):
         template_messages = _reorder_paired_messages(template_messages)
 
+    # Pull each subagent's thread back next to its trunk Task/Agent
+    # tool_result. Pair-reordering left them stranded at the trunk tail,
+    # which would collapse every agent's content under whichever
+    # tool_result rendered last.
+    with log_timing("Relocate subagent blocks", t_start):
+        template_messages = _relocate_subagent_blocks(template_messages)
+
     # Build hierarchy (message_id and ancestry) based on final order
     # This must happen AFTER all reordering to get correct parent-child relationships
     with log_timing("Build message hierarchy", t_start):
@@ -758,6 +792,11 @@ def generate_template_messages(
     # annotate.
     with log_timing("Collect teammate colors", t_start):
         _populate_teammate_colors(ctx)
+
+    # Build task_id ↔ subject / tool_use_id maps so TaskCreate / TaskUpdate
+    # tool_use titles can surface the human-readable subject + assigned id.
+    with log_timing("Collect task metadata", t_start):
+        _populate_task_metadata(ctx)
 
     return root_messages, session_nav, ctx
 
@@ -816,6 +855,26 @@ def _extract_session_hierarchy(
         junction_targets[uuid] = jp.target_sessions
 
     return hierarchy, junction_targets
+
+
+def prepare_session_team_names(messages: list[TranscriptEntry]) -> dict[str, str]:
+    """Extract the teamName per session (teammates feature).
+
+    Returns:
+        Dict mapping session_id → team_name. First non-None ``teamName``
+        sighting per session wins (Claude Code stamps every entry with the
+        same teamName for the duration of a team's activity).
+    """
+    out: dict[str, str] = {}
+    for message in messages:
+        team_name = getattr(message, "teamName", None)
+        if not team_name:
+            continue
+        session_id = getattr(message, "sessionId", "")
+        if not session_id:
+            continue
+        out.setdefault(session_id, team_name)
+    return out
 
 
 def prepare_session_summaries(messages: list[TranscriptEntry]) -> dict[str, str]:
@@ -1406,6 +1465,75 @@ def _identify_message_pairs(messages: list[TemplateMessage]) -> None:
         i += 1
 
 
+def _relocate_subagent_blocks(
+    messages: list[TemplateMessage],
+) -> list[TemplateMessage]:
+    """Move each subagent's content to immediately follow its trunk anchor.
+
+    After ``_reorder_paired_messages`` brings each Task/Agent tool_use ↔
+    tool_result pair adjacent, the subagent thread that conceptually
+    nests under the tool_result (its sidechain entries via parentUuid)
+    has been pushed to the tail of the trunk section. Without
+    relocation, ``_build_message_hierarchy``'s level-stack collapses
+    every subagent thread under whichever anchor sits last in render
+    order — alice/bob/carol all end up as children of one tool_result.
+
+    This pass walks the message list, identifies each subagent block by
+    its synthetic ``{trunk}#agent-{agentId}`` sessionId (stamped by
+    ``_integrate_agent_entries``), and re-inserts the block right after
+    the trunk Task/Agent tool_result whose ``meta.agent_id`` matches.
+    The block keeps its parentUuid-derived order; only its position in
+    the linear message list moves.
+
+    Empty subagent session headers (which ``_reorder_session_template_
+    messages`` leaves at the end) are excluded from blocks and stay
+    where they are — the level-stack ignores them at level 0 anyway.
+    """
+    from .models import ToolResultMessage
+
+    blocks: dict[str, list[TemplateMessage]] = {}
+    block_ids: set[int] = set()
+    for msg in messages:
+        if msg.is_session_header:
+            continue
+        sid = msg.meta.session_id or ""
+        if "#agent-" in sid:
+            agent_id = sid.rsplit("#agent-", 1)[-1]
+            blocks.setdefault(agent_id, []).append(msg)
+            block_ids.add(id(msg))
+
+    if not blocks:
+        return messages
+
+    result: list[TemplateMessage] = []
+    for msg in messages:
+        if id(msg) in block_ids:
+            continue
+        result.append(msg)
+        # An anchor is any trunk-session tool_result that carries an
+        # ``agent_id`` (set by the loader from
+        # ``toolUseResult.agentId``). The ``tool_name`` would normally
+        # be ``"Task"`` or ``"Agent"``, but the tool_factory's
+        # context-lookup occasionally fails to populate it (e.g. when
+        # the tool_use sits in a session-fork branch); falling back to
+        # the agent_id alone keeps relocation working in those cases.
+        if (
+            isinstance(msg.content, ToolResultMessage)
+            and msg.meta.agent_id
+            and "#agent-" not in (msg.meta.session_id or "")
+        ):
+            block = blocks.pop(msg.meta.agent_id, None)
+            if block:
+                result.extend(block)
+
+    # Defensive: emit any subagent block whose anchor we never saw, so
+    # content is never silently dropped.
+    for block in blocks.values():
+        result.extend(block)
+
+    return result
+
+
 def _reorder_paired_messages(messages: list[TemplateMessage]) -> list[TemplateMessage]:
     """Reorder messages so paired messages are adjacent while preserving chronological order.
 
@@ -1502,7 +1630,8 @@ def _get_message_hierarchy_level(msg: TemplateMessage) -> int:
 
     Correct hierarchy based on logical nesting:
     - Level 0: Session headers
-    - Level 1: User messages
+    - Level 1: User messages (including ``TeammateMessage`` — a User
+      whose content is one or more ``<teammate-message>`` blocks)
     - Level 2: System commands/errors, Assistant, Thinking
     - Level 3: Tool use/result, System info/warning (nested under assistant)
     - Level 4: Sidechain user/assistant/thinking (nested under Task tool result)
@@ -1518,8 +1647,15 @@ def _get_message_hierarchy_level(msg: TemplateMessage) -> int:
     msg_type = msg.type
     is_sidechain = msg.is_sidechain
 
-    # User messages at level 1 (under session), level 4 for sidechain
-    if msg_type == "user":
+    # User messages at level 1 (under session), level 4 for sidechain.
+    # ``"teammate"`` shares the User's level: a TeammateMessage is just
+    # a User entry whose content is a stack of <teammate-message>
+    # blocks (see TeammateMessage.message_type). Pre-fix, the
+    # fall-through to level 1 placed sidechain Teammate prompts (the
+    # team-lead's wrapped prompt to a teammate) ABOVE their spawning
+    # Task tool_result, swallowing every subsequent Task tool_use as
+    # a child.
+    if msg_type in ("user", "teammate"):
         return 4 if is_sidechain else 1
 
     # System info/warning at level 3 (tool-related, e.g., hook notifications)
@@ -1749,6 +1885,45 @@ def _populate_teammate_colors(ctx: RenderingContext) -> None:
                 session_colors[block.teammate_id] = block.color
 
 
+def _populate_task_metadata(ctx: RenderingContext) -> None:
+    """Build per-session task_id → subject and tool_use_id → task_id maps.
+
+    Sources, in priority order:
+    1. ``TaskCreateOutput`` (definitive — backend-assigned id paired with
+       the input subject).
+    2. ``TaskListOutput`` rows (snapshot fallback — recovers subject for
+       tasks created before the loaded slice or whose Create
+       tool_result is missing).
+
+    Session-scoped (mirrors ``teammate_colors``) to avoid
+    combined-transcript collisions across sessions.
+    """
+    from .models import (
+        TaskCreateOutput,
+        TaskListOutput,
+        ToolResultMessage,
+    )
+
+    for template_msg in ctx.messages:
+        content = template_msg.content
+        if not isinstance(content, ToolResultMessage):
+            continue
+        session_id = template_msg.meta.session_id if template_msg.meta else ""
+        output = content.output
+        if isinstance(output, TaskCreateOutput) and output.task_id:
+            subjects = ctx.task_subjects.setdefault(session_id, {})
+            if output.subject:
+                subjects.setdefault(output.task_id, output.subject)
+            id_map = ctx.task_id_for_tool_use.setdefault(session_id, {})
+            if content.tool_use_id:
+                id_map.setdefault(content.tool_use_id, output.task_id)
+        elif isinstance(output, TaskListOutput):
+            subjects = ctx.task_subjects.setdefault(session_id, {})
+            for task in output.tasks:
+                if task.id and task.subject:
+                    subjects.setdefault(task.id, task.subject)
+
+
 def _cleanup_sidechain_duplicates(root_messages: list[TemplateMessage]) -> None:
     """Clean up duplicate content in sidechains after tree is built.
 
@@ -1769,16 +1944,19 @@ def _cleanup_sidechain_duplicates(root_messages: list[TemplateMessage]) -> None:
         for child in message.children:
             process_message(child)
 
-        # Check if this is a Task tool_use or tool_result with sidechain children
+        # Check if this is a Task/Agent tool_use or tool_result with sidechain
+        # children. ``Agent`` is the teammates-feature spawn tool name; same
+        # subagent dedup semantics as ``Task``.
+        _spawn_tool_names = {"Task", "Agent"}
         is_task_tool_use = (
             message.type == "tool_use"
             and isinstance(message.content, ToolUseMessage)
-            and message.content.tool_name == "Task"
+            and message.content.tool_name in _spawn_tool_names
         )
         is_task_tool_result = (
             message.type == "tool_result"
             and isinstance(message.content, ToolResultMessage)
-            and message.content.tool_name == "Task"
+            and message.content.tool_name in _spawn_tool_names
         )
 
         if not ((is_task_tool_use or is_task_tool_result) and message.children):
@@ -1786,19 +1964,21 @@ def _cleanup_sidechain_duplicates(root_messages: list[TemplateMessage]) -> None:
 
         children = message.children
 
-        # Remove first sidechain UserTextMessage (duplicate of Task input prompt)
-        # Must be specifically UserTextMessage, not ToolResultMessage or other user types
-        # When removing, adopt its children to preserve sidechain tool messages
-        if (
-            children
-            and children[0].is_sidechain
-            and isinstance(children[0].content, UserTextMessage)
-        ):
-            removed = children.pop(0)
-            # Adopt orphaned children (tool_use/tool_result from sidechain)
-            if removed.children:
-                # Insert at beginning to maintain order
-                children[:0] = removed.children
+        # Remove the first sidechain UserTextMessage child (duplicate of the
+        # Task/Agent input prompt). Scan the full children list rather than
+        # just position 0: under parallel-Task spawning, the parent
+        # tool_use's first DAG child is the next sibling tool_use (per
+        # parentUuid chain), so the sidechain user appears later in the
+        # children list.
+        for sidechain_idx, child in enumerate(children):
+            if child.is_sidechain and isinstance(child.content, UserTextMessage):
+                removed = children.pop(sidechain_idx)
+                # Adopt orphaned children (tool_use/tool_result from sidechain)
+                # at the same position so the sidechain content threads in
+                # the right place.
+                if removed.children:
+                    children[sidechain_idx:sidechain_idx] = removed.children
+                break
 
         # For tool_result only: replace last matching AssistantTextMessage with dedup
         if not is_task_tool_result:
@@ -1985,7 +2165,10 @@ def _filter_messages(messages: list[TranscriptEntry]) -> list[TranscriptEntry]:
 # shouldn't appear at the given level (bash I/O, slash commands, etc.).
 
 # Tool names kept at --detail low (interaction + key signals).
-_LOW_KEEP_TOOLS = {"WebSearch", "WebFetch", "Task"}
+# ``Agent`` is the teammates-feature spawn name (aliased to TaskInput
+# in the tool factory); it must be paired with ``Task`` so real
+# teammate transcripts keep their spawn-and-result pairs at low detail.
+_LOW_KEEP_TOOLS = {"WebSearch", "WebFetch", "Task", "Agent"}
 
 # Post-render classes excluded per level (cumulative: each level adds to the
 # previous). HIGH excludes system/hook noise; LOW adds bash and tools; MINIMAL
@@ -2022,7 +2205,8 @@ def _filter_by_detail(
     """Pre-render filter: strip content items per detail level.
 
     - MINIMAL: keep only user/assistant text (no tools, thinking, system).
-    - LOW: keep user/assistant text + WebSearch/WebFetch/Task tools.
+    - LOW: keep user/assistant text + WebSearch / WebFetch / Task / Agent
+      tools (Agent is the teammates spawn alias for Task).
     - HIGH: keep user/assistant + all tools/thinking, drop system entries.
     """
     from copy import copy
@@ -2262,6 +2446,7 @@ def _render_messages(
     show_tokens_for_message: set[str],
     session_hierarchy: dict[str, dict[str, Any]] | None = None,
     session_summaries: dict[str, str] | None = None,
+    session_team_names: dict[str, str] | None = None,
     junction_targets: dict[str, list[str]] | None = None,
 ) -> RenderingContext:
     """Pass 2: Render pre-filtered messages to TemplateMessage objects.
@@ -2380,6 +2565,13 @@ def _render_messages(
                             fork_context = _fork_point_preview(fmsg, ctx)
                             break
 
+                # Branches inherit the team_name of the original (pre-fork)
+                # session: a within-session fork doesn't change which team is
+                # active.
+                _team_names = session_team_names or {}
+                branch_team_name = _team_names.get(branch_sid) or _team_names.get(
+                    original_sid or ""
+                )
                 branch_header_content = SessionHeaderMessage(
                     branch_header_meta,
                     title=branch_title,
@@ -2393,6 +2585,7 @@ def _render_messages(
                     is_branch=True,
                     original_session_id=original_sid,
                     first_uuid=message_uuid,
+                    team_name=branch_team_name,
                 )
                 branch_header = TemplateMessage(branch_header_content)
                 branch_header.render_session_id = branch_sid
@@ -2453,8 +2646,12 @@ def _render_messages(
         session_id = meta.session_id or "unknown"
         session_summary = sessions.get(session_id, {}).get("summary")
 
-        # Add session header if this is a new session
-        # Skip headers for agent sidechain sessions (they appear inline)
+        # Add session header if this is a new session. Subagent sessions
+        # (synthetic ``{trunk}#agent-{agentId}`` sessionId from
+        # ``_integrate_agent_entries``) get NO header — their chunks are
+        # relocated under the trunk Task/Agent tool_result by
+        # ``_relocate_subagent_blocks`` and render inline as part of the
+        # trunk session.
         is_agent = is_agent_session(session_id)
         if session_id not in seen_sessions:
             seen_sessions.add(session_id)
@@ -2467,7 +2664,6 @@ def _render_messages(
                     else session_id[:8]
                 )
 
-                # Create meta with session_id for the session header
                 session_header_meta = MessageMeta(
                     session_id=session_id,
                     timestamp="",
@@ -2490,6 +2686,7 @@ def _render_messages(
                     parent_message_index=parent_msg_idx,
                     depth=hier.get("depth", 0),
                     attachment_uuid=hier.get("attachment_uuid"),
+                    team_name=(session_team_names or {}).get(session_id),
                 )
                 # Register and track session's first message
                 session_header = TemplateMessage(session_header_content)
