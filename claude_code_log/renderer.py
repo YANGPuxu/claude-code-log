@@ -204,8 +204,9 @@ class TemplateMessage:
         # Unique index in RenderingContext.messages (assigned by ctx.register())
         self.message_index: Optional[int] = None
 
-        # Pairing metadata (assigned by _mark_pair())
+        # Pairing metadata (assigned by _mark_pair() / _mark_triple())
         self.pair_first: Optional[int] = None  # Index of first message in pair
+        self.pair_middle: Optional[int] = None  # Index of middle message (triples only)
         self.pair_last: Optional[int] = None  # Index of last message in pair
         self.pair_duration: Optional[str] = None  # Duration string for pair_last
 
@@ -265,18 +266,26 @@ class TemplateMessage:
 
     @property
     def is_paired(self) -> bool:
-        """Check if this message is part of a pair."""
+        """Check if this message is part of a pair (or triple)."""
         return self.pair_first is not None or self.pair_last is not None
 
     @property
     def is_first_in_pair(self) -> bool:
-        """Check if this is the first message in a pair (has pair_last set)."""
-        return self.pair_last is not None
+        """Check if this is the first message in a pair (has pair_last set
+        but no `pair_first`, since the middle of a triple has both)."""
+        return self.pair_last is not None and self.pair_first is None
+
+    @property
+    def is_middle_in_pair(self) -> bool:
+        """Check if this is the middle message in a triple (has both
+        `pair_first` and `pair_last` set, pointing at its surrounding members)."""
+        return self.pair_first is not None and self.pair_last is not None
 
     @property
     def is_last_in_pair(self) -> bool:
-        """Check if this is the last message in a pair (has pair_first set)."""
-        return self.pair_first is not None
+        """Check if this is the last message in a pair (has `pair_first` set
+        but no `pair_last`, since the middle of a triple has both)."""
+        return self.pair_first is not None and self.pair_last is None
 
     @property
     def pair_role(self) -> Optional[str]:
@@ -284,11 +293,14 @@ class TemplateMessage:
 
         Returns:
             "pair_first" if this is the first message in a pair,
+            "pair_middle" if this is the middle message in a triple,
             "pair_last" if this is the last message in a pair,
             None if not paired.
         """
         if self.is_first_in_pair:
             return "pair_first"
+        if self.is_middle_in_pair:
+            return "pair_middle"
         if self.is_last_in_pair:
             return "pair_last"
         return None
@@ -1378,6 +1390,27 @@ def _mark_pair(first: TemplateMessage, last: TemplateMessage) -> None:
         last.pair_first = first_index
 
 
+def _mark_triple(
+    first: TemplateMessage, middle: TemplateMessage, last: TemplateMessage
+) -> None:
+    """Mark three messages as a triple (pair_first → pair_middle → pair_last).
+
+    Used for the `(UserSlash caveat, SlashCommand, CommandOutput)` sequence
+    that wraps every `/cmd`-style invocation in real transcripts: the three
+    messages share one timestamp and represent a single logical event.
+    """
+    first_index = first.message_index
+    middle_index = middle.message_index
+    last_index = last.message_index
+    if first_index is None or middle_index is None or last_index is None:
+        return
+    first.pair_middle = middle_index
+    first.pair_last = last_index
+    middle.pair_first = first_index
+    middle.pair_last = last_index
+    last.pair_first = first_index
+
+
 def _try_pair_adjacent(
     current: TemplateMessage,
     next_msg: TemplateMessage,
@@ -1386,11 +1419,27 @@ def _try_pair_adjacent(
 
     Returns True if messages were paired, False otherwise.
 
-    Adjacent pairing rules:
+    Adjacent pairing rules (2-message — checked after the 3-message rule
+    in `_try_pair_triple`):
+    - slash-command invocation + slash-command expanded prompt (either order)
     - user slash-command + user command-output
     - bash-input + bash-output
     - thinking + assistant
     """
+    # Slash command invocation + expanded prompt — represent one logical
+    # event (the typed `/cmd` and the prompt-text the harness sent in its
+    # place) and may appear in either order: `/init` shows Slash → UserSlash,
+    # while `/exit` shows UserSlash (caveat) → Slash.
+    if (
+        isinstance(current.content, SlashCommandMessage)
+        and isinstance(next_msg.content, UserSlashCommandMessage)
+    ) or (
+        isinstance(current.content, UserSlashCommandMessage)
+        and isinstance(next_msg.content, SlashCommandMessage)
+    ):
+        _mark_pair(current, next_msg)
+        return True
+
     # Slash command + command output (both are user messages)
     if isinstance(
         current.content, (SlashCommandMessage, UserSlashCommandMessage)
@@ -1408,6 +1457,32 @@ def _try_pair_adjacent(
         _mark_pair(current, next_msg)
         return True
 
+    return False
+
+
+def _try_pair_triple(
+    a: TemplateMessage, b: TemplateMessage, c: TemplateMessage
+) -> bool:
+    """Try to pair three adjacent messages as a single logical event.
+
+    Returns True if pair_first/pair_middle/pair_last were assigned.
+
+    Triple pairing rules:
+    - `(UserSlashCommand caveat, SlashCommand /cmd, CommandOutput)` — the
+      common `/exit`, `/clear`, `/context`, `/todos`, `/doctor` shape:
+      the harness emits a caveat preamble, the typed slash command, and
+      the command's output as three sibling user messages with a single
+      timestamp. Grouping them keeps the slash-command title authoritative
+      in Markdown and avoids an orphan output that would otherwise lose
+      its rendered body.
+    """
+    if (
+        isinstance(a.content, UserSlashCommandMessage)
+        and isinstance(b.content, SlashCommandMessage)
+        and isinstance(c.content, CommandOutputMessage)
+    ):
+        _mark_triple(a, b, c)
+        return True
     return False
 
 
@@ -1459,7 +1534,17 @@ def _identify_message_pairs(messages: list[TemplateMessage]) -> None:
             i += 1
             continue
 
-        # Try adjacent pairing first (can skip next message if paired)
+        # Try 3-message triple before 2-message adjacent — the triple's
+        # predicate (UserSlash → Slash → CommandOutput) is strictly more
+        # specific than the adjacent slash-command rules, and applying the
+        # adjacent rule first would consume the first two and orphan the
+        # third (the dominant `/exit`-style pattern in real transcripts).
+        if i + 2 < len(messages):
+            if _try_pair_triple(current, messages[i + 1], messages[i + 2]):
+                i += 3
+                continue
+
+        # Try adjacent pairing (can skip next message if paired)
         if i + 1 < len(messages):
             next_msg = messages[i + 1]
             if _try_pair_adjacent(current, next_msg):
@@ -2397,6 +2482,7 @@ def _reindex_filtered_context(
         # Pair linkage is re-established post-filter by
         # `_identify_message_pairs`; clear any stale references first.
         msg.pair_first = None
+        msg.pair_middle = None
         msg.pair_last = None
 
     ctx.messages = filtered

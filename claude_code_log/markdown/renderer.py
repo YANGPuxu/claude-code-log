@@ -440,6 +440,26 @@ class MarkdownRenderer(Renderer):
         # command_name already includes the leading slash
         return f"🤷 Command `{content.command_name}`"
 
+    def title_UserSlashCommandMessage(
+        self, _content: UserSlashCommandMessage, _: TemplateMessage
+    ) -> str:
+        # When paired with a SlashCommand, borrow its `🤷 Command /cmd` title.
+        # Markdown's `_render_message` skips middle and last members entirely,
+        # so for the (UserSlash → Slash) and (UserSlash → Slash → Output)
+        # orderings produced by `/exit`-like flows the SlashCommand's own title
+        # would otherwise be lost. Check pair_middle first (triples) then
+        # pair_last (2-msg pair). Mirrors `title_ThinkingMessage`'s precedent.
+        if _.is_first_in_pair and self._ctx is not None:
+            for partner_idx in (_.pair_middle, _.pair_last):
+                if partner_idx is None:
+                    continue
+                if (partner := self._ctx.get(partner_idx)) and isinstance(
+                    partner.content, SlashCommandMessage
+                ):
+                    return f"🤷 Command `{partner.content.command_name}`"
+        # Fallback to base behaviour ("User (slash command)").
+        return super().title_UserSlashCommandMessage(_content, _)
+
     def format_CommandOutputMessage(
         self, content: CommandOutputMessage, _: TemplateMessage
     ) -> str:
@@ -1147,8 +1167,9 @@ class MarkdownRenderer(Renderer):
 
     def _render_message(self, msg: TemplateMessage, level: int) -> str:
         """Render a message and its children recursively."""
-        # Skip pair_last messages (rendered with pair_first)
-        if msg.is_last_in_pair:
+        # Skip pair_middle and pair_last — both render under pair_first
+        # (pair_first owns the heading and delegates body formatting).
+        if msg.is_middle_in_pair or msg.is_last_in_pair:
             return ""
 
         parts: list[str] = []
@@ -1191,17 +1212,24 @@ class MarkdownRenderer(Renderer):
             if content:
                 parts.append(content)
 
-        # Format paired message content (e.g., tool result)
-        pair_msg = None
-        if msg.is_first_in_pair and msg.pair_last is not None:
-            if pair_msg := (self._ctx.get(msg.pair_last) if self._ctx else None):
-                if pair_content := self.format_content(pair_msg):
-                    parts.append(pair_content)
+        # Format paired message bodies (middle then last, when present).
+        # Triples (slash-command META → CMD → OUT) deliver three bodies
+        # under one heading; standard 2-msg pairs only have pair_last.
+        pair_partners: list[TemplateMessage] = []
+        if msg.is_first_in_pair:
+            for partner_idx in (msg.pair_middle, msg.pair_last):
+                if partner_idx is None or self._ctx is None:
+                    continue
+                if partner := self._ctx.get(partner_idx):
+                    pair_partners.append(partner)
+                    if pair_content := self.format_content(partner):
+                        parts.append(pair_content)
 
-        # Render children at next level (from both this message and paired message)
+        # Render children at next level (from this message and any paired members)
         all_children = list(msg.children)
-        if pair_msg and pair_msg.children:
-            all_children.extend(pair_msg.children)
+        for partner in pair_partners:
+            if partner.children:
+                all_children.extend(partner.children)
         for child in all_children:
             if child_output := self._render_message(child, level + 1):
                 parts.append(child_output)
