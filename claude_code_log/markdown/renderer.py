@@ -709,6 +709,21 @@ class MarkdownRenderer(Renderer):
         """Fallback for unknown tool inputs - render as key/value list."""
         return self._render_params(content.input)
 
+    def format_ToolUseMessage(
+        self, content: ToolUseMessage, message: TemplateMessage
+    ) -> str:
+        """Append the folded Skill body (if set) as raw markdown (issue #93)."""
+        rendered = super().format_ToolUseMessage(content, message)
+        if content.skill_body:
+            # The skill body is already markdown; include it verbatim, with
+            # a blank line separator from the params list above.
+            rendered = (
+                f"{rendered}\n\n{content.skill_body}"
+                if rendered
+                else content.skill_body
+            )
+        return rendered
+
     def _render_params(self, params: dict[str, Any]) -> str:
         """Render parameters as a markdown key/value list."""
         if not params:

@@ -148,6 +148,7 @@ from .utils import (
     get_message_emoji,
     get_template_environment,
     is_session_header,
+    render_markdown_collapsible,
 )
 
 if TYPE_CHECKING:
@@ -424,6 +425,27 @@ class HtmlRenderer(Renderer):
     def format_ToolUseContent(self, content: ToolUseContent, _: TemplateMessage) -> str:
         """Format → <table class='params'>key | value rows</table>."""
         return render_params_table(content.input)
+
+    def format_ToolUseMessage(
+        self, content: ToolUseMessage, message: TemplateMessage
+    ) -> str:
+        """Format Skill tool_use with folded skill body (issue #93).
+
+        For every other tool_use, delegate to the base dispatcher
+        (→ params table). For Skill, append the expanded skill body —
+        set by `_pair_skill_tool_uses` from the matching isMeta=True
+        slash-command entry — as collapsible markdown below the params.
+        """
+        rendered = super().format_ToolUseMessage(content, message)
+        if content.skill_body:
+            body_html = render_markdown_collapsible(
+                content.skill_body,
+                "skill-body",
+                line_threshold=30,
+                preview_line_count=10,
+            )
+            rendered = f"{rendered}\n{body_html}"
+        return rendered
 
     # -------------------------------------------------------------------------
     # Tool Output Formatters

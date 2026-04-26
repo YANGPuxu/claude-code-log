@@ -183,6 +183,10 @@ class UserTranscriptEntry(BaseTranscriptEntry):
     message: UserMessageModel
     toolUseResult: Optional[ToolUseResult] = None
     agentId: Optional[str] = None  # From toolUseResult when present
+    # Present on isMeta=True entries produced by a Skill tool invocation —
+    # carries the id of the originating tool_use so the renderer can fold
+    # the skill body into that tool_use block. See issue #93.
+    sourceToolUseID: Optional[str] = None
 
 
 class AssistantTranscriptEntry(BaseTranscriptEntry):
@@ -290,6 +294,9 @@ class MessageMeta:
     # Context fields
     is_sidechain: bool = False
     is_meta: bool = False  # User slash command (isMeta=True in transcript)
+    source_tool_use_id: Optional[str] = (
+        None  # Skill pairing (see UserTranscriptEntry.sourceToolUseID)
+    )
     agent_id: Optional[str] = None
     cwd: str = ""
     git_branch: Optional[str] = None
@@ -811,6 +818,11 @@ class ToolUseMessage(MessageContent):
     input: "ToolInput"  # Specialized (BashInput, etc.) or ToolUseContent fallback
     tool_use_id: str  # From ToolUseContent.id
     tool_name: str  # From ToolUseContent.name
+    # Skill-tool pairing (issue #93): when the Skill tool is invoked,
+    # the expanded slash-command body shipped as a separate isMeta=True
+    # user entry is folded into this field so the Skill tool_use renders
+    # as a single visual unit.
+    skill_body: Optional[str] = None
 
     @property
     def message_type(self) -> str:

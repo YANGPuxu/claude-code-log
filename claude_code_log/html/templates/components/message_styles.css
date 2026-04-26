@@ -693,6 +693,17 @@ pre > code {
     font-size: 80%;
 }
 
+/* Skill-tool body folded into the Skill tool_use block (issue #93).
+   The expanded skill markdown renders below the params table, offset
+   so it reads as a nested part of the tool invocation rather than a
+   sibling message. */
+.skill-body {
+    margin-top: 8px;
+    padding: 8px 12px;
+    border-left: 2px solid var(--tool-param-sep-color);
+    font-size: 90%;
+}
+
 .tool-params-table tr {
     border-bottom: 1px solid var(--tool-param-sep-color);
 }
