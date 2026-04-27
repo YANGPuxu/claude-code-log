@@ -78,6 +78,25 @@ class TestTeammatesMarkdownSnapshots:
         assert md == markdown_snapshot
 
 
+class TestAsyncAgentsMarkdownSnapshots:
+    """Snapshot tests for the async-agents feature Markdown rendering."""
+
+    def test_async_agents_fixture_markdown(self, markdown_snapshot, test_data_dir):
+        """Snapshot the async-agents fixture rendered as Markdown.
+
+        Covers the ``*[async]*`` italic hint on the spawning Task title,
+        the TaskOutput poll card, the ``Result (from async notification)``
+        collapsible fold under the spawn, and the dedup-collapsed
+        ``<task-notification>`` card.
+        """
+        async_dir = test_data_dir / "async_agents"
+        main_jsonl = async_dir / "eb000000-0000-4000-8000-000000000001.jsonl"
+        messages = load_transcript(main_jsonl)
+        renderer = MarkdownRenderer()
+        md = renderer.generate(messages, "Async Agents Fixture")
+        assert md == markdown_snapshot
+
+
 class TestIndexMarkdownSnapshots:
     """Snapshot tests for project index Markdown output."""
 

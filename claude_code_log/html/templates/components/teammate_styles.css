@@ -221,6 +221,71 @@
     font-weight: 500;
 }
 
+/* `[async]` hint on Task tool_use titles when run_in_background=True
+   (issue #90). Same muted treatment as the action tag — the reader
+   needs to scan past it most of the time. */
+.task-async-hint {
+    color: var(--cc-blue);
+    font-size: 0.85em;
+    font-weight: 500;
+}
+
+/* "Result (from async notification)" label that introduces the
+   folded agent-answer section in an async Task tool_result body
+   (issue #90 Phase 3). */
+.task-async-answer-label {
+    margin-top: 0.6em;
+    color: var(--cc-blue);
+    font-weight: 600;
+    font-size: 0.9em;
+}
+
+.task-async-answer-label small {
+    color: var(--cc-gray);
+    font-weight: 400;
+    margin-left: 0.3em;
+}
+
+/* Cancel the tool_result negative-margin pull-up on the async-answer
+   collapsible — that rule is meant to tuck the *first* collapsible under
+   the tool title, but here the collapsible follows a label and would
+   otherwise overlap it. */
+.task-async-answer .collapsible-code {
+    margin-top: 0;
+}
+
+/* ----------------------------------------------------------------------
+   Async-agent cards (issue #90).
+
+   - .task-output-card: TaskOutput (polling tool) input + result.
+   - .task-notification-card: <task-notification> User entry metadata.
+
+   Both reuse the .teammate-tool-card grid; adding a coloured left
+   border lets the visual scan separate spawn (Task) → poll
+   (TaskOutput) → result (Notification).
+   ---------------------------------------------------------------------- */
+.teammate-tool-card.task-output-card {
+    --cc-color: var(--cc-cyan);
+
+    border-left: 4px solid var(--cc-color);
+}
+
+.teammate-tool-card.task-notification-card {
+    --cc-color: var(--cc-blue);
+
+    border-left: 4px solid var(--cc-color);
+}
+
+.task-notification-backlink {
+    color: var(--cc-blue);
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.task-notification-backlink:hover {
+    text-decoration: underline;
+}
+
 /* ----------------------------------------------------------------------
    Teammate-aware tool cards.
    Used by TeamCreate / TeamDelete / TaskCreate / TaskUpdate / SendMessage

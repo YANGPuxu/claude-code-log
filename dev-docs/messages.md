@@ -282,6 +282,40 @@ class UserMemoryMessage(MessageContent):
 - **Note**: Typically skipped during rendering (duplicates Task prompt)
 - **Files**: [user_sidechain.json](messages/user/user_sidechain.json)
 
+### Async Task Notification (`<task-notification>`)
+
+When an async-spawned `Task` (with `run_in_background=True`) completes,
+Claude Code injects a synthetic User entry whose `message.content` is
+a raw `<task-notification>…</task-notification>` block.
+`task_notification_factory.create_task_notification_message` parses
+the embedded fields into a structured content model.
+
+- **Condition**: `message.content` is a string containing `<task-notification>…</task-notification>`
+- **Content Model**: `TaskNotificationMessage` (a `MessageContent` subclass — *not* a `UserTextMessage` variant)
+- **CSS Classes**: `user task_notification` (the `user` class is what keeps the runtime "User" filter toggle showing the card)
+
+```python
+@dataclass
+class TaskNotificationMessage(MessageContent):
+    task_id: str
+    status: str               # "completed", "failed", …
+    summary: str              # Agent "<description>" completed
+    result_text: str          # the agent's final answer body
+    usage: Optional[TaskNotificationUsage]
+    transcript_path: Optional[str]   # "Full transcript available at: …"
+    raw_text: Optional[str]
+    # Phase 3 dedup markers
+    result_is_duplicate: bool = False
+    spawning_task_message_index: Optional[int] = None
+```
+
+The `result_text` is the canonical source for the spawn-fold —
+`_link_async_notifications` copies it onto
+`TaskOutput.async_final_answer` of the spawning `Task` tool_result so
+the answer renders in place. See
+[agents.md § 2 (Async task agents)](agents.md#2-async-task-agents-90)
+for the end-to-end flow and detail-level matrix.
+
 ### IDE Notifications
 
 User messages may contain IDE notification tags that are parsed into structured content:
@@ -328,7 +362,8 @@ Tool results appear as `ToolResultContent` items in user messages, linked to the
 | Edit | `EditOutput` | file_path, success, diffs, message, start_line | [tool_result](messages/tools/Edit-tool_result.json) |
 | Write | `WriteOutput` | file_path, success, message | [tool_result](messages/tools/Write-tool_result.json) |
 | Bash | `BashOutput` | content, has_ansi | [tool_result](messages/tools/Bash-tool_result.json) |
-| Task | `TaskOutput` | result | [tool_result](messages/tools/Task-tool_result.json) |
+| Task | `TaskOutput` *(see note)* | result, metadata, async_final_answer | [tool_result](messages/tools/Task-tool_result.json) |
+| TaskOutput | `TaskOutputResult` *(see note)* | retrieval_status, task_id, task_type, status, output_truncated, output_file | (async-agent polling tool — issue #90) |
 | AskUserQuestion | `AskUserQuestionOutput` | answers, raw_message | [tool_result](messages/tools/AskUserQuestion-tool_result.json) |
 | ExitPlanMode | `ExitPlanModeOutput` | message, approved | [tool_result](messages/tools/ExitPlanMode-tool_result.json) |
 | Glob | `GlobOutput` *(TODO)* | pattern, files, truncated | [tool_result](messages/tools/Glob-tool_result.json) |
@@ -336,6 +371,15 @@ Tool results appear as `ToolResultContent` items in user messages, linked to the
 | (error) | — | is_error: true | [Bash error](messages/tools/Bash-tool_result_error.json) |
 
 **(TODO)**: Glob and Grep output models defined in models.py but not yet used.
+
+**Note on `TaskOutput` vs `TaskOutputResult`**: two unrelated dataclasses with overlapping names.
+`TaskOutput` is the parsed output of the **`Task` tool_result** (carries the launch stub or final
+answer text, agent metadata, and the Phase 3 `async_final_answer` field).
+`TaskOutputResult` is the parsed output of the **`TaskOutput` *polling* tool's tool_result** (the
+`<retrieval_status>/<task_id>/<status>/<output>[Truncated…]` body that the assistant explicitly
+polls between an async-Task launch and its completion notification). The fold writes into
+`TaskOutput.async_final_answer` — i.e. the Task tool_result, not the polling tool's result. See
+[agents.md § 2.2](agents.md#22-the-two-taskoutput-names).
 
 ### Generic Tool Result
 
@@ -853,7 +897,8 @@ Sub-agent messages (from `Task` tool):
 
 | Tool | Use Sample | Result Sample | Input Model | Output Model |
 |------|------------|---------------|-------------|--------------|
-| Task | [tool_use](messages/tools/Task-tool_use.json) | [tool_result](messages/tools/Task-tool_result.json) | `TaskInput` | `TaskOutput` *(TODO)* |
+| Task | [tool_use](messages/tools/Task-tool_use.json) | [tool_result](messages/tools/Task-tool_result.json) | `TaskInput` | `TaskOutput` |
+| TaskOutput *(async-agent polling)* | — | — | `TaskOutputInput` | `TaskOutputResult` |
 | TodoWrite | [tool_use](messages/tools/TodoWrite-tool_use.json) | [tool_result](messages/tools/TodoWrite-tool_result.json) | `TodoWriteInput` | — |
 | AskUserQuestion | [tool_use](messages/tools/AskUserQuestion-tool_use.json) | [tool_result](messages/tools/AskUserQuestion-tool_result.json) | `AskUserQuestionInput` | — |
 | ExitPlanMode | [tool_use](messages/tools/ExitPlanMode-tool_use.json) | [tool_result](messages/tools/ExitPlanMode-tool_result.json) | `ExitPlanModeInput` | — |

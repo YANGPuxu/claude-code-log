@@ -148,7 +148,7 @@ Determines the hierarchy level for a message based on its CSS class and sidechai
 | 0 | `session-header` | Session dividers |
 | 1 | `user`, `teammate` | User messages (top-level conversation), including TeammateMessage entries |
 | 2 | `assistant`, `thinking`, `system` (commands/errors) | Direct responses to user |
-| 3 | `tool_use`, `tool_result`, `system-info`, `system-warning` | Nested under assistant |
+| 3 | `tool_use`, `tool_result`, `system-info`, `system-warning`, `task_notification` | Nested under assistant (the spawning Task for async-agent notifications, the calling assistant for everything else) |
 | 4 | `user`/`teammate`/`assistant`/`thinking` (sidechain) | Sub-agent responses (from Task tool); also the team-lead's wrapped prompt to a teammate |
 | 5 | `tool_use sidechain`, `tool_result sidechain` | Sub-agent tools |
 

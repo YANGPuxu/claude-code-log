@@ -34,6 +34,7 @@ from ..models import (
     TaskCreateInput,
     TaskInput,
     TaskListInput,
+    TaskOutputInput,
     TaskUpdateInput,
     TeamCreateInput,
     TeamDeleteInput,
@@ -60,6 +61,7 @@ from ..models import (
     TaskListItem,
     TaskListOutput,
     TaskOutput,
+    TaskOutputResult,
     TaskUpdateOutput,
     TeamCreateOutput,
     TeamDeleteOutput,
@@ -105,6 +107,10 @@ TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
     "TaskUpdate": TaskUpdateInput,
     "TaskList": TaskListInput,
     "SendMessage": SendMessageInput,
+    # Async-agents polling tool (issue #90). Pairs with the
+    # ``<task-notification>`` user entry that delivers the actual
+    # result.
+    "TaskOutput": TaskOutputInput,
 }
 
 
@@ -913,6 +919,72 @@ def _opt_str(value: Any) -> Optional[str]:
     return value if isinstance(value, str) and value else None
 
 
+# Tags we care about in TaskOutput's XML-shaped text.
+_TASKOUTPUT_TAGS: tuple[str, ...] = (
+    "retrieval_status",
+    "task_id",
+    "task_type",
+    "status",
+)
+_TASKOUTPUT_TAG_RE = re.compile(
+    r"<(?P<tag>" + "|".join(_TASKOUTPUT_TAGS) + r")>(?P<body>.*?)</(?P=tag)>",
+    re.DOTALL,
+)
+_TASKOUTPUT_OUTPUT_RE = re.compile(
+    r"<output>\s*(?P<body>.*?)\s*</output>",
+    re.DOTALL,
+)
+_TASKOUTPUT_TRUNCATED_RE = re.compile(
+    r"\[Truncated\.\s*Full output:\s*(?P<path>[^\]]+)\]",
+    re.IGNORECASE,
+)
+
+
+def parse_taskoutput_output(
+    tool_result: ToolResultContent, file_path: Optional[str]
+) -> Optional[TaskOutputResult]:
+    """Parse the TaskOutput async-agent polling tool result.
+
+    The payload is a sequence of single-tag XML-style fields plus an
+    ``<output>`` block. We capture the metadata and discard the
+    ``<output>`` body entirely — Claude Code already exposes the
+    agent's full transcript inline as a sidechain in our HTML, and the
+    completion result lands in the trunk via the
+    ``<task-notification>`` user message. We only note whether
+    ``<output>`` was truncated and the linked ``output_file`` path,
+    when given.
+    """
+    del file_path
+    text = _extract_tool_result_text(tool_result)
+    if not text:
+        return None
+
+    fields: dict[str, str] = {}
+    for match in _TASKOUTPUT_TAG_RE.finditer(text):
+        fields[match.group("tag")] = match.group("body").strip()
+
+    if not fields:
+        return None  # not a TaskOutput-shaped payload
+
+    truncated = False
+    output_file: Optional[str] = None
+    if (output_block := _TASKOUTPUT_OUTPUT_RE.search(text)) is not None:
+        body = output_block.group("body")
+        if (trunc := _TASKOUTPUT_TRUNCATED_RE.search(body)) is not None:
+            truncated = True
+            output_file = trunc.group("path").strip()
+
+    return TaskOutputResult(
+        retrieval_status=fields.get("retrieval_status", ""),
+        task_id=fields.get("task_id", ""),
+        task_type=fields.get("task_type", ""),
+        status=fields.get("status", ""),
+        output_truncated=truncated,
+        output_file=output_file,
+        raw_text=text,
+    )
+
+
 # Type alias for tool output parsers
 # Standard signature: (tool_result, file_path) -> Optional[ToolOutput]
 # Extended signature: (tool_result, file_path, tool_use_result) -> Optional[ToolOutput]
@@ -939,6 +1011,8 @@ TOOL_OUTPUT_PARSERS: dict[str, ToolOutputParser] = {
     "TaskUpdate": parse_taskupdate_output,
     "TaskList": parse_tasklist_output,
     "SendMessage": parse_sendmessage_output,
+    # Async-agents (issue #90)
+    "TaskOutput": parse_taskoutput_output,
 }
 
 # Parsers that accept the extended signature with tool_use_result

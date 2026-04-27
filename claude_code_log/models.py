@@ -656,6 +656,71 @@ class TeammateMessage(MessageContent):
         return True
 
 
+@dataclass
+class TaskNotificationUsage:
+    """Usage stats reported in a ``<task-notification>`` block.
+
+    All fields are optional — older transcripts (or non-completion
+    statuses like ``failed``) may omit some.
+    """
+
+    total_tokens: Optional[int] = None
+    tool_uses: Optional[int] = None
+    duration_ms: Optional[int] = None
+
+
+@dataclass
+class TaskNotificationMessage(MessageContent):
+    """User entry shape for async-agent task completion notifications.
+
+    Claude Code's async-agent feature (issue #90) injects a User entry
+    into the trunk session when an async-spawned ``Task`` (the kind
+    with ``run_in_background=True``) finishes. Content is an XML-tagged
+    block of the form::
+
+        <task-notification>
+        <task-id>a8b740b</task-id>
+        <status>completed</status>
+        <summary>Agent "..." completed</summary>
+        <result>... markdown of agent's final response ...</result>
+        <usage>total_tokens: 23099
+        tool_uses: 2
+        duration_ms: 15506</usage>
+        </task-notification>
+        Full transcript available at: /tmp/.../tasks/a8b740b.output
+
+    The ``result`` body usually duplicates the last sub-assistant
+    message in the spawned agent's sidechain — Phase 3 of the
+    async-agents plan folds it into the spawning Task's tool_result so
+    the notification card can render as a backlink-only stub.
+    """
+
+    task_id: str = ""
+    status: str = ""
+    summary: str = ""
+    result_text: str = ""
+    usage: Optional[TaskNotificationUsage] = None
+    transcript_path: Optional[str] = None
+    raw_text: Optional[str] = None  # Original content if parsing dropped fields
+    # Phase 3 dedup marker: when True, ``result_text`` duplicates the
+    # last sub-assistant in the spawning Task's sidechain (which is
+    # already rendered inline). The renderer should then collapse the
+    # body to a backlink-only stub pointing at the spawning Task's
+    # message_index, preserving the uuid chain without doubling the
+    # content.
+    result_is_duplicate: bool = False
+    spawning_task_message_index: Optional[int] = None
+
+    @property
+    def message_type(self) -> str:
+        return "task_notification"
+
+    @property
+    def has_markdown(self) -> bool:
+        # The <result> body is typically Markdown.
+        return bool(self.result_text) and not self.result_is_duplicate
+
+
 # =============================================================================
 # Assistant Message Content Models
 # =============================================================================
@@ -1081,6 +1146,21 @@ class SendMessageInput(BaseModel):
     model_config = {"extra": "allow"}
 
 
+class TaskOutputInput(BaseModel):
+    """Input parameters for the TaskOutput polling tool (async agents).
+
+    Async-spawned ``Task`` agents return their result later via a
+    ``<task-notification>`` user message; the assistant can also poll
+    explicitly with ``TaskOutput`` between launch and notification.
+    """
+
+    task_id: str = ""
+    block: bool = False
+    timeout: Optional[int] = None
+
+    model_config = {"extra": "allow"}
+
+
 # Union of all typed tool inputs
 ToolInput = Union[
     BashInput,
@@ -1103,6 +1183,7 @@ ToolInput = Union[
     TaskUpdateInput,
     TaskListInput,
     SendMessageInput,
+    TaskOutputInput,
     ToolUseContent,  # Generic fallback when no specialized parser
 ]
 
@@ -1223,6 +1304,16 @@ class TaskOutput:
     teammate_id: Optional[str] = None
     agent_id: Optional[str] = None
     color: Optional[str] = None
+    # Async-agent (issue #90) fold: when the spawn's ``result`` body is
+    # just the "Async agent launched successfully…" stub, the actual
+    # answer arrives later via the ``<task-notification>`` User entry
+    # AND lives at the end of the spawned agent's sidechain.
+    # ``_link_async_notifications`` copies it here from the matching
+    # last sub-assistant so the renderer can fold the answer into the
+    # spawn's tool_result card. The same pass removes the duplicated
+    # sub-assistant from the sidechain rendering so the answer doesn't
+    # appear twice.
+    async_final_answer: Optional[str] = None
 
 
 @dataclass
@@ -1408,6 +1499,27 @@ class SendMessageOutput:
     raw_text: Optional[str] = None
 
 
+@dataclass
+class TaskOutputResult:
+    """Parsed TaskOutput polling tool result (async agents).
+
+    The raw payload is XML-tagged metadata wrapping a (usually
+    truncated) snapshot of the agent's transcript. We surface the
+    metadata and discard the snapshot — the agent's full transcript
+    already renders inline as a sidechain in our HTML, and the
+    completion result reaches the trunk via the
+    ``<task-notification>`` user message.
+    """
+
+    retrieval_status: str = ""
+    task_id: str = ""
+    task_type: str = ""
+    status: str = ""
+    output_truncated: bool = False
+    output_file: Optional[str] = None
+    raw_text: Optional[str] = None
+
+
 # Union of all specialized output types + ToolResultContent as generic fallback
 ToolOutput = Union[
     ReadOutput,
@@ -1425,6 +1537,7 @@ ToolOutput = Union[
     TaskUpdateOutput,
     TaskListOutput,
     SendMessageOutput,
+    TaskOutputResult,
     # TODO: Add as parsers are implemented:
     # GlobOutput, GrepOutput
     ToolResultContent,  # Generic fallback for unparsed results

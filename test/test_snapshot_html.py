@@ -82,6 +82,50 @@ class TestTeammatesHTMLSnapshots:
         assert html == html_snapshot
 
 
+class TestAsyncAgentsHTMLSnapshots:
+    """Snapshot tests for the async-agents feature rendering (issue #90)."""
+
+    def test_async_agents_fixture_html(self, html_snapshot, test_data_dir):
+        """Snapshot the async-agents fixture rendered end-to-end.
+
+        Locks in:
+        - the [async] hint badge on the spawning Task tool_use title
+        - the ``Async agent launched successfully`` stub on the tool_result
+        - the ``Result (from async notification)`` fold rendered below
+          the stub when the last sub-assistant matches the notification
+        - the TaskOutput poll card (cyan border, retrieval_status row)
+        - the <task-notification> card collapsed to a backlink stub
+          when its result_text was folded into the spawn
+        """
+        async_dir = test_data_dir / "async_agents"
+        main_jsonl = async_dir / "eb000000-0000-4000-8000-000000000001.jsonl"
+        messages = load_transcript(main_jsonl)
+        html = generate_html(messages, "Async Agents Fixture")
+        assert html == html_snapshot
+
+    def test_async_agents_fixture_html_low(self, html_snapshot, test_data_dir):
+        """Snapshot the async-agents fixture at ``--detail low``.
+
+        Regression guard for the "fold lost at low" report (mail #2620 →
+        Plan A): the spawn-fold is now sourced from the notification's
+        ``result_text``, so it survives the LOW detail level where
+        sidechain entries are stripped pre-render. The locked-in shape
+        confirms the ``Result (from async notification)`` fold is
+        still rendered under the ``Async agent launched successfully``
+        stub at LOW.
+        """
+        from claude_code_log.html.renderer import HtmlRenderer
+        from claude_code_log.models import DetailLevel
+
+        async_dir = test_data_dir / "async_agents"
+        main_jsonl = async_dir / "eb000000-0000-4000-8000-000000000001.jsonl"
+        messages = load_transcript(main_jsonl)
+        renderer = HtmlRenderer()
+        renderer.detail = DetailLevel.LOW
+        html = renderer.generate(messages, "Async Agents Fixture (LOW)")
+        assert html == html_snapshot
+
+
 class TestIndexHTMLSnapshots:
     """Snapshot tests for project index HTML output."""
 

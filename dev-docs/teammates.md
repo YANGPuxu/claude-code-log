@@ -24,7 +24,9 @@ It is the as-built reference for the work delivered across three PRs:
 This doc captures *what was actually built* — the as-built shape after
 the trilogy + the post-merge refactor described above. The companion
 DAG architecture is in [`dev-docs/dag.md`](dag.md); message-type
-reference is in [`dev-docs/messages.md`](messages.md).
+reference is in [`dev-docs/messages.md`](messages.md); the broader
+agent-spawning context (sync sub-agents, async task agents, and how
+teammates fit in) is in [`dev-docs/agents.md`](agents.md).
 
 Parent issue: [#91 Support teammates](https://github.com/daaain/claude-code-log/issues/91).
 
@@ -823,24 +825,24 @@ trilogy. Not part of #91 but adjacent / discovered work:
 
 ### 10.1 Standard sub-agents (#79) and async task agents (#90)
 
-Both share the same metadata-tail shape (`agentId:` line + optional
-`<usage>`). The `parse_agent_result_metadata` parser is generic and
-will populate `TaskOutput.metadata` for them too. So **the primary
-linking path should already work**.
+Async task agents (#90) are now supported — see
+[`agents.md` § 2](agents.md#2-async-task-agents-90) for the as-built
+flow (typed models, parsers, the spawn-fold pipeline, detail-level
+matrix). The notification's `<result>` body folds onto
+`TaskOutput.async_final_answer` of the spawning Task tool_result so
+the answer renders at the spawn site, with detail-level-aware drop
+of the standalone notification card at LOW.
 
-What's *not* done for those issues:
-
-- The `<teammate-message>`-shaped first-entry that powers the prompt-hash
-  fallback is teammates-specific. Sync sub-agents (#79) and async agents
-  (#90) have plain user-text first entries; the fallback would need a
-  different normalization (raw text comparison instead of team-lead-body
-  extraction) to apply. The current `find_team_lead_body(text) or text`
-  expression already covers it for transcripts where the body is bare
-  text — needs validation against real #79/#90 transcripts.
-- Async-agent task notifications (`<task-notification><task-id>...`) per
-  #91's notes aren't yet structurally surfaced — they fall through as
-  user text. Could become a `TaskNotificationMessage` content type with
-  its own formatter, mirroring `TeammateMessage`'s shape.
+Standard sync sub-agents (#79) share the same `agentId:` /
+`<usage>` metadata-tail shape that `parse_agent_result_metadata`
+already handles, so the primary linking path is generic. The
+`<teammate-message>`-shaped first-entry that powers the prompt-hash
+fallback is teammates-specific; sync sub-agents have plain
+user-text first entries and would need a different normalization
+to use the fallback path (the current
+`find_team_lead_body(text) or text` expression already covers
+bare-text bodies, but hasn't been validated against real #79
+transcripts).
 
 ### 10.2 Detail-level interaction
 
@@ -935,6 +937,11 @@ Remaining fine-tuning ideas (not blocking):
 
 ### Other dev-docs
 
+- [`dev-docs/agents.md`](agents.md) — agent-spawning overview
+  (sync sub-agents, async task agents, teammates). The
+  async-agents § documents the `<task-notification>` flow and the
+  Phase 3 fold pipeline; teammates is the special-case the present
+  doc covers in detail.
 - [`dev-docs/dag.md`](dag.md) — session DAG, sub-agent integration
   via `_integrate_agent_entries`. Read this first if the synthetic
   sessionId / parent-rewrite mechanics are unclear.

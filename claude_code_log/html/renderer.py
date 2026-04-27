@@ -15,11 +15,13 @@ from ..models import (
     BashOutputMessage,
     CommandOutputMessage,
     CompactedSummaryMessage,
+    DetailLevel,
     HookSummaryMessage,
     ImageContent,
     SessionHeaderMessage,
     SlashCommandMessage,
     SystemMessage,
+    TaskNotificationMessage,
     TeammateMessage,
     ThinkingMessage,
     ToolUseMessage,
@@ -41,6 +43,7 @@ from ..models import (
     TaskCreateInput,
     TaskInput,
     TaskListInput,
+    TaskOutputInput,
     TaskUpdateInput,
     TeamCreateInput,
     TeamDeleteInput,
@@ -60,6 +63,7 @@ from ..models import (
     TaskCreateOutput,
     TaskListOutput,
     TaskOutput,
+    TaskOutputResult,
     TaskUpdateOutput,
     TeamCreateOutput,
     TeamDeleteOutput,
@@ -117,6 +121,11 @@ from .teammate_formatter import (
     format_teamdelete_input as _format_teamdelete_input,
     format_teamdelete_output as _format_teamdelete_output,
     format_teammate_content,
+)
+from .async_formatter import (
+    format_task_notification_content as _format_task_notification_content,
+    format_taskoutput_input as _format_taskoutput_input,
+    format_taskoutput_output as _format_taskoutput_output,
 )
 from .tool_formatters import (
     format_askuserquestion_input,
@@ -319,6 +328,23 @@ class HtmlRenderer(Renderer):
         """
         return format_teammate_content(content, self._colors_for(_))
 
+    def format_TaskNotificationMessage(
+        self, content: TaskNotificationMessage, _: TemplateMessage
+    ) -> str:
+        """Format → metadata `<dl>` + collapsible Markdown body for an
+        async-agent ``<task-notification>`` user entry (issue #90).
+
+        At ``DetailLevel.LOW`` a duplicate-flagged notification renders
+        empty so the rendering loop's "skip empty messages" elision
+        drops the card — the spawn-fold already shows the answer in
+        place, and "ghosting" via empty output avoids the index-remap
+        cascade that deleting the message would trigger (ancestry
+        classes, backlinks, session nav anchors).
+        """
+        if self.detail == DetailLevel.LOW and content.result_is_duplicate:
+            return ""
+        return _format_task_notification_content(content)
+
     # -------------------------------------------------------------------------
     # Assistant Content Formatters
     # -------------------------------------------------------------------------
@@ -427,6 +453,10 @@ class HtmlRenderer(Renderer):
         """Format → send-message card with colored recipient badge."""
         return _format_sendmessage_input(input, self._colors_for(_))
 
+    def format_TaskOutputInput(self, input: TaskOutputInput, _: TemplateMessage) -> str:
+        """Format → minimal TaskOutput input card (block / timeout if set)."""
+        return _format_taskoutput_input(input)
+
     def format_ToolUseContent(self, content: ToolUseContent, _: TemplateMessage) -> str:
         """Format → <table class='params'>key | value rows</table>."""
         return render_params_table(content.input)
@@ -532,6 +562,12 @@ class HtmlRenderer(Renderer):
         """Format → sent/failed notice with colored target badge + request id."""
         return _format_sendmessage_output(output, self._colors_for(_))
 
+    def format_TaskOutputResult(
+        self, output: TaskOutputResult, _: TemplateMessage
+    ) -> str:
+        """Format → minimal TaskOutput result card (metadata only, no transcript)."""
+        return _format_taskoutput_output(output)
+
     def format_ToolResultContent(
         self, output: ToolResultContent, _: TemplateMessage
     ) -> str:
@@ -575,20 +611,39 @@ class HtmlRenderer(Renderer):
         return "❓ Asking questions..."
 
     def title_TaskInput(self, input: TaskInput, message: TemplateMessage) -> str:
-        """Title → '🔧 Task <desc> (subagent_type)'."""
+        """Title → '🔧 Task <desc> (subagent_type) [async]'.
+
+        ``[async]`` muted hint appears when ``run_in_background=True``
+        so the reader can tell at a glance which spawns will be
+        followed up later by a ``<task-notification>`` user entry
+        (issue #90), as opposed to synchronous Task calls whose
+        result returns inline.
+        """
         content = cast(ToolUseMessage, message.content)
         escaped_name = escape_html(content.tool_name)
         escaped_subagent = (
             escape_html(input.subagent_type) if input.subagent_type else ""
         )
+        async_hint = (
+            " <span class='task-async-hint'>[async]</span>"
+            if input.run_in_background
+            else ""
+        )
         if input.description and input.subagent_type:
             escaped_desc = escape_html(input.description)
-            return f"🔧 {escaped_name} <span class='tool-summary'>{escaped_desc}</span> <span class='tool-subagent'>({escaped_subagent})</span>"
+            return (
+                f"🔧 {escaped_name} <span class='tool-summary'>{escaped_desc}</span>"
+                f" <span class='tool-subagent'>({escaped_subagent})</span>"
+                f"{async_hint}"
+            )
         elif input.description:
-            return self._tool_title(message, "🔧", input.description)
+            return self._tool_title(message, "🔧", input.description) + async_hint
         elif input.subagent_type:
-            return f"🔧 {escaped_name} <span class='tool-subagent'>({escaped_subagent})</span>"
-        return f"🔧 {escaped_name}"
+            return (
+                f"🔧 {escaped_name} <span class='tool-subagent'>({escaped_subagent})</span>"
+                f"{async_hint}"
+            )
+        return f"🔧 {escaped_name}{async_hint}"
 
     def title_EditInput(self, input: EditInput, message: TemplateMessage) -> str:
         """Title → '📝 Edit <file_path>'."""
@@ -708,6 +763,42 @@ class HtmlRenderer(Renderer):
             badge = _teammate_badge(input.recipient, color)
             return f"✉️ SendMessage <span class='tool-summary'>to {badge}</span>"
         return "✉️ SendMessage"
+
+    def title_TaskOutputInput(self, input: TaskOutputInput, _: TemplateMessage) -> str:
+        """Title → '🔍 TaskOutput #<task_id>' for the async-agent polling tool.
+
+        ``🔍`` reads as "look up / inspect" — distinct from the
+        spawning ``🔧 Task`` so the visual scan separates spawn from
+        poll. The leading emoji also short-circuits the template's
+        default ``🛠️`` prepend.
+        """
+        if input.task_id:
+            return f"🔍 TaskOutput <code>#{escape_html(input.task_id)}</code>"
+        return "🔍 TaskOutput"
+
+    def title_TaskNotificationMessage(
+        self, content: TaskNotificationMessage, _: TemplateMessage
+    ) -> str:
+        """Title → '🔄 Async result • <summary>' for an async-agent
+        completion notification (issue #90). The summary is the most
+        useful at-a-glance hint; the rest of the metadata renders in
+        the body card.
+
+        Empty at ``DetailLevel.LOW`` for duplicate-flagged
+        notifications — pairs with ``format_TaskNotificationMessage``
+        to "ghost" the card while keeping the message in
+        ``ctx.messages``.
+        """
+        if self.detail == DetailLevel.LOW and content.result_is_duplicate:
+            return ""
+        if content.summary:
+            return (
+                "🔄 Async result "
+                f"<span class='tool-summary'>{escape_html(content.summary)}</span>"
+            )
+        if content.task_id:
+            return f"🔄 Async result <code>#{escape_html(content.task_id)}</code>"
+        return "🔄 Async result"
 
     def _flatten_preorder(
         self, roots: list[TemplateMessage]

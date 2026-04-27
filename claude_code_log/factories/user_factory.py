@@ -35,11 +35,16 @@ from ..models import (
     ImageContent,
     MessageMeta,
     SlashCommandMessage,
+    TaskNotificationMessage,
     TeammateMessage,
     TextContent,
     UserMemoryMessage,
     UserSlashCommandMessage,
     UserTextMessage,
+)
+from .task_notification_factory import (
+    create_task_notification_message,
+    has_task_notification,
 )
 from .teammate_factory import create_teammate_message, has_teammate_message
 
@@ -373,6 +378,7 @@ UserMessageContent = Union[
     UserSlashCommandMessage,
     UserTextMessage,
     TeammateMessage,
+    TaskNotificationMessage,
 ]
 
 
@@ -423,6 +429,14 @@ def create_user_message(
     if has_teammate_message(text_content):
         if teammate := create_teammate_message(meta, text_content):
             return teammate
+
+    # Async-agent completion: Claude Code injects a User entry with a
+    # ``<task-notification>`` payload when an async-spawned Task
+    # finishes (issue #90). Cheap detector first; the parser handles
+    # the rest. Surfaces metadata + result_text as a typed content.
+    if has_task_notification(text_content):
+        if notification := create_task_notification_message(meta, text_content):
+            return notification
 
     # Slash command expanded prompts - combine all text as markdown
     if is_slash_command:

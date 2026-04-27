@@ -446,13 +446,31 @@ def format_bash_output(output: BashOutput) -> str:
 def format_task_output(output: TaskOutput) -> str:
     """Format Task tool result as HTML with markdown rendering.
 
+    For async-spawned Tasks (issue #90), ``output.result`` is just the
+    "Async agent launched successfully…" stub; the real answer arrives
+    later via the ``<task-notification>`` and is folded onto
+    ``output.async_final_answer`` by ``_link_async_notifications``.
+    Render the stub first, then the folded answer in a separate
+    collapsible "Result" section so the spawn carries the actual
+    agent output where the reader expects it.
+
     Args:
         output: Parsed TaskOutput with agent's response
 
     Returns:
         HTML string with markdown rendered in collapsible section
     """
-    return render_markdown_collapsible(output.result, "task-result")
+    parts: list[str] = [render_markdown_collapsible(output.result, "task-result")]
+    if output.async_final_answer:
+        parts.append(
+            '<div class="task-async-answer-label">'
+            "Result <small>(from async notification)</small>"
+            "</div>"
+        )
+        parts.append(
+            render_markdown_collapsible(output.async_final_answer, "task-async-answer")
+        )
+    return "".join(parts)
 
 
 def format_askuserquestion_output(output: AskUserQuestionOutput) -> str:
