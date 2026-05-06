@@ -18,6 +18,7 @@ from .converter import (
     ensure_fresh_cache,
     generate_single_session_file,
     get_file_extension,
+    get_index_filename,
     process_projects_hierarchy,
 )
 from .cache import (
@@ -381,8 +382,25 @@ def _clear_caches(input_path: Path, all_projects: bool) -> None:
         click.echo(f"Warning: Failed to clear cache: {e}")
 
 
-def _clear_output_files(input_path: Path, all_projects: bool, file_ext: str) -> None:
-    """Clear generated output files (HTML or Markdown) for the specified path."""
+def _list_generated_outputs(directory: Path, file_ext: str) -> list[Path]:
+    """Return only files this tool generates, not every file with the extension.
+
+    Safe for JSON in particular, where the project directory may contain
+    unrelated user `.json` files that must not be deleted.
+    """
+    if file_ext == "json":
+        return [
+            *directory.glob("combined_transcripts*.json"),
+            *directory.glob("session-*.json"),
+        ]
+    return list(directory.glob(f"*.{file_ext}"))
+
+
+def _clear_output_files(
+    input_path: Path, all_projects: bool, output_format: str
+) -> None:
+    """Clear generated output files (HTML/Markdown/JSON) for the specified path."""
+    file_ext = get_file_extension(output_format)
     ext_upper = file_ext.upper()
     try:
         if all_projects:
@@ -398,7 +416,7 @@ def _clear_output_files(input_path: Path, all_projects: bool, file_ext: str) -> 
             for project_dir in project_dirs:
                 try:
                     # Remove output files in project directory
-                    output_files = list(project_dir.glob(f"*.{file_ext}"))
+                    output_files = _list_generated_outputs(project_dir, file_ext)
                     for output_file in output_files:
                         output_file.unlink()
                         total_removed += 1
@@ -412,12 +430,14 @@ def _clear_output_files(input_path: Path, all_projects: bool, file_ext: str) -> 
                         f"  Warning: Failed to clear {ext_upper} files for {project_dir.name}: {e}"
                     )
 
-            # Also remove top-level index file
-            index_file = input_path / f"index.{file_ext}"
+            # Also remove top-level index file (shared helper keeps this in
+            # sync with the generator, which uses a different name for JSON).
+            index_filename = get_index_filename(output_format)
+            index_file = input_path / index_filename
             if index_file.exists():
                 index_file.unlink()
                 total_removed += 1
-                click.echo(f"  Removed top-level index.{file_ext}")
+                click.echo(f"  Removed top-level {index_filename}")
 
             if total_removed > 0:
                 click.echo(f"Total: Removed {total_removed} {ext_upper} files")
@@ -427,7 +447,7 @@ def _clear_output_files(input_path: Path, all_projects: bool, file_ext: str) -> 
         elif input_path.is_dir():
             # Clear output files for single directory
             click.echo(f"Clearing {ext_upper} files for {input_path}...")
-            output_files = list(input_path.glob(f"*.{file_ext}"))
+            output_files = _list_generated_outputs(input_path, file_ext)
             for output_file in output_files:
                 output_file.unlink()
 
@@ -513,9 +533,9 @@ def _clear_output_files(input_path: Path, all_projects: bool, file_ext: str) -> 
     "-f",
     "--format",
     "output_format",
-    type=click.Choice(["html", "md", "markdown"]),
+    type=click.Choice(["html", "md", "markdown", "json"]),
     default="html",
-    help="Output format (default: html). Supports html, md, or markdown.",
+    help="Output format (default: html). Supports html, md/markdown, or json.",
 )
 @click.option(
     "--image-export-mode",
@@ -780,10 +800,10 @@ def main(
 
         # Handle output files clearing
         if clear_output:
-            file_ext = get_file_extension(output_format)
-            _clear_output_files(input_path, all_projects, file_ext)
+            _clear_output_files(input_path, all_projects, output_format)
             if clear_output and not (from_date or to_date or input_path.is_file()):
                 # If only clearing output files, exit after clearing
+                file_ext = get_file_extension(output_format)
                 click.echo(f"{file_ext.upper()} files cleared successfully.")
                 return
 

@@ -3964,6 +3964,10 @@ def get_renderer(
         # For Markdown, default to referenced mode
         mode = image_export_mode or "referenced"
         renderer = MarkdownRenderer(image_export_mode=mode)
+    elif format == "json":
+        from .json.renderer import JsonRenderer
+
+        renderer = JsonRenderer()
     else:
         raise ValueError(f"Unsupported format: {format}")
     renderer.detail = detail

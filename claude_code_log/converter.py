@@ -77,6 +77,16 @@ def get_file_extension(format: str) -> str:
     return "md" if format in ("md", "markdown") else format
 
 
+def get_index_filename(format: str) -> str:
+    """Get the all-projects index filename for a format.
+
+    JSON uses `all-projects-summary.json` so it doesn't collide with the
+    per-project JSON exports; other formats use `index.{ext}`.
+    """
+    ext = get_file_extension(format)
+    return "all-projects-summary.json" if ext == "json" else f"index.{ext}"
+
+
 # =============================================================================
 # Progress Chain Repair
 # =============================================================================
@@ -2734,7 +2744,7 @@ def process_projects_hierarchy(
 
     # Generate index (always regenerate if outdated)
     ext = get_file_extension(output_format)
-    index_path = projects_path / f"index.{ext}"
+    index_path = projects_path / get_index_filename(output_format)
     renderer = get_renderer(output_format, image_export_mode)
     index_regenerated = False
     if renderer.is_outdated(index_path) or from_date or to_date or any_cache_updated:

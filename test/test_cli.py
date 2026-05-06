@@ -258,7 +258,7 @@ class TestClearOutputFiles:
 
         assert len(list(project_dir.glob("*.html"))) == 2
 
-        _clear_output_files(project_dir, all_projects=False, file_ext="html")
+        _clear_output_files(project_dir, all_projects=False, output_format="html")
 
         assert len(list(project_dir.glob("*.html"))) == 0
 
@@ -278,7 +278,7 @@ class TestClearOutputFiles:
         # Create index file
         (projects_dir / "index.html").write_text("<html></html>")
 
-        _clear_output_files(projects_dir, all_projects=True, file_ext="html")
+        _clear_output_files(projects_dir, all_projects=True, output_format="html")
 
         # All HTML files should be gone
         assert not (projects_dir / "index.html").exists()
@@ -297,7 +297,7 @@ class TestClearOutputFiles:
         (project_dir / "combined_transcripts.md").write_text("# Test")
         assert len(list(project_dir.glob("*.md"))) == 1
 
-        _clear_output_files(project_dir, all_projects=False, file_ext="md")
+        _clear_output_files(project_dir, all_projects=False, output_format="md")
 
         assert len(list(project_dir.glob("*.md"))) == 0
 
@@ -308,7 +308,7 @@ class TestClearOutputFiles:
         (project_dir / "test.jsonl").write_text('{"type": "user"}')
 
         # Should complete without error
-        _clear_output_files(project_dir, all_projects=False, file_ext="html")
+        _clear_output_files(project_dir, all_projects=False, output_format="html")
 
 
 class TestCLIMainCommand:
