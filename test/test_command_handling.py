@@ -58,7 +58,12 @@ def test_slash_command_handling():
         else:
             # For short content, should have pre tag with the escaped content
             assert "<pre>" in html, "Should contain pre tag for short content"
-        assert "<code>init</code>" in html, "Should show command name"
+        # Bare ``<command-name>init</command-name>`` (legacy harness emission)
+        # is normalised to ``/init`` by ``create_slash_command_message`` so
+        # display is consistent with modern ``/init``-prefixed emissions.
+        assert "<code>/init</code>" in html, (
+            "Should show normalised command name (/init)"
+        )
         # Check for user slash-command CSS class (not "system")
         # These are user messages with command tags, not system messages
         assert "class='message user slash-command" in html, (

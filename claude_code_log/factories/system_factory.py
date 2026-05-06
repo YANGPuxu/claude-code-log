@@ -17,6 +17,7 @@ from ..models import (
     SystemTranscriptEntry,
 )
 from .meta_factory import create_meta
+from .user_factory import simplify_command_tags
 
 
 # =============================================================================
@@ -85,6 +86,29 @@ def create_system_message(
     meta = create_meta(transcript)
     level = transcript.level or "info"
 
+    # ``local_command`` system entries carry the harness's
+    # ``<command-name>X</command-name><command-message>X</command-message>
+    # <command-args>Y</command-args>`` triple (for typed slash commands)
+    # or a ``<local-command-stdout>X</local-command-stdout>`` payload
+    # (for dialog-dismissal hints like ``"Status dialog dismissed"``).
+    # Render those as ``"/X"`` / ``"X"`` rather than the raw XML —
+    # closes #129. Other subtypes (``compact_boundary``,
+    # ``stop_hook_summary``, …) carry plain text and pass through
+    # unchanged via the no-match fallback in ``simplify_command_tags``.
+    #
+    # The subtype gate is **intent-documenting, not safety-providing**:
+    # ``simplify_command_tags`` is opportunistic by design (returns its
+    # input unchanged when none of the patterns match), so applying it
+    # unconditionally would also be safe. The gate is here to make
+    # "we only expect this XML soup in ``local_command`` entries"
+    # explicit, and to keep the audit trail tight if the harness ever
+    # starts emitting command tags under a different subtype.
+    text = (
+        simplify_command_tags(transcript.content)
+        if transcript.subtype == "local_command"
+        else transcript.content
+    )
+
     # Surface compact-boundary metadata on the SystemMessage so the nav
     # label on the following CompactedSummaryMessage can read preTokens
     # and trigger without having to crawl back to the transcript entry.
@@ -103,7 +127,7 @@ def create_system_message(
 
     return SystemMessage(
         level=level,
-        text=transcript.content,
+        text=text,
         meta=meta,
         compact_pre_tokens=pre_tokens,
         compact_trigger=compact_trigger,

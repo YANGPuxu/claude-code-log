@@ -75,6 +75,79 @@ def is_bash_output(text_content: str) -> bool:
 
 
 # =============================================================================
+# Command-tag Cleanup
+# =============================================================================
+
+
+_COMMAND_NAME_RE = re.compile(r"<command-name>([^<]+)</command-name>")
+# DOTALL + non-greedy: the harness writes free-form text into
+# ``<command-args>`` and free-form text legitimately contains ``<``
+# (e.g. ``/explain <Component>``). The earlier ``[^<]*`` form silently
+# dropped such args because the closing ``</command-args>`` couldn't
+# match. ``(.*?)`` is robust to ``<`` in payload; the closing tag
+# anchors termination. ``</command-args>`` literal in args remains
+# theoretically unsafe but isn't an emission shape the harness produces.
+_COMMAND_ARGS_RE = re.compile(r"<command-args>(.*?)</command-args>", re.DOTALL)
+_LOCAL_STDOUT_RE = re.compile(
+    r"<local-command-stdout>(.*?)</local-command-stdout>", re.DOTALL
+)
+_LOCAL_STDERR_RE = re.compile(
+    r"<local-command-stderr>(.*?)</local-command-stderr>", re.DOTALL
+)
+
+
+def _normalize_slash(cmd: str) -> str:
+    """Prefix ``/`` to a command name that doesn't already carry one.
+
+    Modern harness emissions (2025+) write ``<command-name>/exit</command-name>``
+    with the leading slash; legacy / synthetic fixtures occasionally
+    write the bare form (``<command-name>init</command-name>``). Display
+    paths and structured content models want a single shape so mixed
+    transcripts don't render ``/exit`` next to ``test-command``.
+    """
+    return cmd if cmd.startswith("/") else f"/{cmd}"
+
+
+def simplify_command_tags(text: str) -> str:
+    """Strip Claude Code's command-tag XML soup down to its semantic core.
+
+    Three shapes covered:
+
+    - ``<command-name>/X</command-name><command-message>X</command-message><command-args>Y</command-args>``
+      → ``"/X"`` (or ``"/X Y"`` when args are non-empty). The
+      ``<command-message>`` field is always a redundant restatement of
+      the name without the leading ``/``, never carrying information.
+      Bare ``<command-name>X</command-name>`` (legacy emission) is
+      normalised to ``"/X"`` for display consistency with modern
+      ``/X``-prefixed emissions.
+    - ``<local-command-stdout>X</local-command-stdout>`` → ``"X"`` —
+      the harness's user-facing hint for dialog-style commands
+      (``"Status dialog dismissed"``, ``"Skills dialog dismissed"``,
+      …).
+    - ``<local-command-stderr>X</local-command-stderr>`` → ``"X"``
+      (paired stderr equivalent).
+
+    Returns the text unchanged when none of the patterns match — keeps
+    the helper safe to apply opportunistically as part of a preview
+    pipeline (slash-command branch headers, system-info messages, …)
+    that also receives non-command text.
+    """
+    name_match = _COMMAND_NAME_RE.search(text)
+    if name_match:
+        cmd = _normalize_slash(name_match.group(1).strip())
+        args_match = _COMMAND_ARGS_RE.search(text)
+        args = args_match.group(1).strip() if args_match else ""
+        return f"{cmd} {args}".strip() if args else cmd
+
+    for regex in (_LOCAL_STDOUT_RE, _LOCAL_STDERR_RE):
+        match = regex.search(text)
+        if match:
+            return match.group(1).strip()
+
+    return text
+
+
+# =============================================================================
 # Slash Command Creation
 # =============================================================================
 
@@ -85,6 +158,13 @@ def create_slash_command_message(
 ) -> Optional[SlashCommandMessage]:
     """Create SlashCommandMessage from text containing command tags.
 
+    ``command_name`` is normalised to ``/cmd`` shape — the modern
+    harness emits the leading slash, but legacy ``<command-name>init``
+    fixtures don't, and the typed content model is consumed by display
+    paths that expect a single shape (HTML/Markdown title formatters,
+    JSON output). ``command_args`` is captured verbatim including any
+    ``<`` characters in the payload (see ``_COMMAND_ARGS_RE``).
+
     Args:
         text: Raw text that may contain command-name, command-args, command-contents tags
         meta: Message metadata
@@ -92,13 +172,13 @@ def create_slash_command_message(
     Returns:
         SlashCommandMessage if tags found, None otherwise
     """
-    command_name_match = re.search(r"<command-name>([^<]+)</command-name>", text)
+    command_name_match = _COMMAND_NAME_RE.search(text)
     if not command_name_match:
         return None
 
-    command_name = command_name_match.group(1).strip()
+    command_name = _normalize_slash(command_name_match.group(1).strip())
 
-    command_args_match = re.search(r"<command-args>([^<]*)</command-args>", text)
+    command_args_match = _COMMAND_ARGS_RE.search(text)
     command_args = command_args_match.group(1).strip() if command_args_match else ""
 
     # Parse command contents, handling JSON format

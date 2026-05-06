@@ -103,24 +103,32 @@ class TestCommandExtraction:
     """Test command information extraction from system messages."""
 
     def test_create_slash_command_message_complete(self):
-        """Test parsing complete slash command information."""
+        """Test parsing complete slash command information.
+
+        Bare ``test-cmd`` in the input asserts the legacy-emission
+        normalisation path: the typed model carries the unified
+        ``/cmd`` shape.
+        """
         text = '<command-message>Testing...</command-message>\n<command-name>test-cmd</command-name>\n<command-args>--verbose</command-args>\n<command-contents>{"type": "text", "text": "Test content"}</command-contents>'
 
         result = create_slash_command_message(MessageMeta.empty(), text)
 
         assert result is not None
-        assert result.command_name == "test-cmd"
+        assert result.command_name == "/test-cmd"
         assert result.command_args == "--verbose"
         assert result.command_contents == "Test content"
 
     def test_create_slash_command_message_missing_parts(self):
-        """Test parsing slash command with missing parts."""
+        """Test parsing slash command with missing parts.
+
+        Bare ``minimal-cmd`` is normalised to ``/minimal-cmd``.
+        """
         text = "<command-name>minimal-cmd</command-name>"
 
         result = create_slash_command_message(MessageMeta.empty(), text)
 
         assert result is not None
-        assert result.command_name == "minimal-cmd"
+        assert result.command_name == "/minimal-cmd"
         assert result.command_args == ""
         assert result.command_contents == ""
 
@@ -139,7 +147,7 @@ class TestCommandExtraction:
         result = create_slash_command_message(MessageMeta.empty(), text)
 
         assert result is not None
-        assert result.command_name == "bad-json"
+        assert result.command_name == "/bad-json"
         assert (
             result.command_contents == '{"invalid": json'
         )  # Raw text when JSON parsing fails

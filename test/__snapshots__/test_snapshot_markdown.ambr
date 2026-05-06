@@ -434,7 +434,7 @@
   Error: Tool execution failed with error: Command not found
   ```
   
-  ## 🤷 Command `test-command`
+  ## 🤷 Command `/test-command`
   
   **Args:** `--verbose --output /tmp/test.log`
   

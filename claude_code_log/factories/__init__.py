@@ -28,6 +28,8 @@ from .user_factory import (
     create_slash_command_message,
     create_user_memory_message,
     create_user_message,
+    # Command-tag cleanup helper (used by system_factory, utils preview path)
+    simplify_command_tags,
     # Patterns and constants
     COMPACTED_SUMMARY_PREFIX,
     IDE_DIAGNOSTICS_PATTERN,
@@ -108,6 +110,8 @@ __all__ = [
     "create_slash_command_message",
     "create_user_memory_message",
     "create_user_message",
+    # Command-tag cleanup helper
+    "simplify_command_tags",
     # Patterns and constants
     "COMPACTED_SUMMARY_PREFIX",
     "IDE_DIAGNOSTICS_PATTERN",

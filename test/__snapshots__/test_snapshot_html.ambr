@@ -29246,7 +29246,7 @@
               </div>
           </div>
           <div class='debug-info'>edge_007</div>
-          <div class='content'><code>test-command</code><br><strong>Args:</strong> --verbose --output /tmp/test.log<br><strong>Content:</strong><pre>This is the actual command content with some JSON structure and escaped characters: &quot;quotes&quot; and 
+          <div class='content'><code>/test-command</code><br><strong>Args:</strong> --verbose --output /tmp/test.log<br><strong>Content:</strong><pre>This is the actual command content with some JSON structure and escaped characters: &quot;quotes&quot; and 
   line breaks
   </pre></div>
           

@@ -262,11 +262,13 @@ class TestMarkdownRender:
     def test_triple_renders_command_name_and_output(self, tmp_path) -> None:
         from claude_code_log.markdown.renderer import MarkdownRenderer
 
+        # Bare ``exit`` exercises the legacy-emission normalisation path —
+        # the rendered command name carries the unified ``/exit`` shape.
         msgs = self._load_triple(tmp_path, cmd="exit")
         md = MarkdownRenderer().generate(msgs, "Test")
 
         # Slash command title borrowed (would otherwise be "User (slash command)").
-        assert "🤷 Command `exit`" in md
+        assert "🤷 Command `/exit`" in md
         assert "User (slash command)" not in md
         # Caveat body kept (delegated from pair_first to itself).
         assert "Caveat: caveat text." in md
@@ -294,7 +296,64 @@ class TestMarkdownRender:
         assert "pair_middle" in classes[1]
         assert "pair_last" in classes[2]
         # Triple still surfaces the three distinct messages — slash-command card
-        # carries the bare command name in its body code tag, command-output
-        # card carries its stdout. Both must remain visible after pairing.
-        assert "<code>exit</code>" in html
+        # carries the normalised command name in its body code tag (bare
+        # ``exit`` → ``/exit``), command-output card carries its stdout.
+        # Both must remain visible after pairing.
+        assert "<code>/exit</code>" in html
         assert "See ya!" in html
+
+    def test_args_with_backticks_render_with_widened_fence(self, tmp_path) -> None:
+        """``command_args`` containing backticks must not break the inline span.
+
+        Reachability note: the ``_COMMAND_ARGS_RE`` tightening to ``(.*?)``
+        in this PR widened the class of args that survive parsing — args
+        containing ``<`` (which strongly correlates with shell-ish
+        payloads carrying backticks) used to be silently dropped, now
+        round-trip. The Markdown formatter wraps ``command_args`` in an
+        inline code span; with a single-tick fence, an inner backtick
+        would terminate the span at the first match and the rest of the
+        args would render as a mix of plain text and unmatched ticks.
+        ``_inline_code`` widens the fence past the longest backtick run.
+        """
+        import json
+        from claude_code_log.converter import load_transcript
+        from claude_code_log.markdown.renderer import MarkdownRenderer
+
+        args_payload = "echo `date` && diff a > b"
+        line = {
+            "type": "user",
+            "uuid": "u1",
+            "timestamp": "2026-04-17T01:13:55Z",
+            "sessionId": "s1",
+            "version": "1",
+            "parentUuid": None,
+            "isSidechain": False,
+            "userType": "user",
+            "cwd": "/x",
+            "message": {
+                "role": "user",
+                "content": (
+                    "<command-name>/run</command-name>"
+                    "<command-message>run</command-message>"
+                    f"<command-args>{args_payload}</command-args>"
+                ),
+            },
+        }
+        fn = tmp_path / "t.jsonl"
+        fn.write_text(json.dumps(line))
+        msgs = load_transcript(fn)
+        md = MarkdownRenderer().generate(msgs, "Test")
+
+        # The args payload must appear verbatim somewhere in the output.
+        assert args_payload in md
+        # The whole payload must sit inside one inline-code span — i.e.
+        # delimited by the same fence on both sides. With the widened
+        # fence (``` outside, single ` inside), the line should contain
+        # ``**Args:** ``echo `date` && diff a > b``\n``-style output.
+        # Locate the substring and verify the surrounding fence pair.
+        assert "**Args:** ``" in md, f"Expected widened fence, got: {md!r}"
+        # Sanity: the payload wasn't fragmented across multiple ticks
+        # (which a single-tick span would have produced).
+        assert f"``{args_payload}``" in md, (
+            f"Expected widened fence to wrap args verbatim, got: {md!r}"
+        )

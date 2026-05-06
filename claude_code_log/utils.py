@@ -20,6 +20,7 @@ from .factories import (
     is_command_message,
     is_local_command_output,
     is_system_message,
+    simplify_command_tags,
 )
 
 
@@ -168,17 +169,6 @@ def should_skip_message(text_content: str) -> bool:
     return is_system and not is_command and not is_output
 
 
-def extract_init_command_description(text_content: str) -> str:
-    """
-    Extract a meaningful description from init command content.
-
-    Returns a user-friendly description for init commands instead of raw XML.
-    """
-    if "<command-name>init" in text_content and "<command-contents>" in text_content:
-        return "Claude Initializes Codebase Documentation Guide (/init command)"
-    return text_content
-
-
 def should_use_as_session_starter(text_content: str) -> bool:
     """
     Determine if a user message should be used as a session starter preview.
@@ -213,11 +203,23 @@ def create_session_preview(text_content: str) -> str:
 
     Returns:
         A preview string, truncated to FIRST_USER_MESSAGE_PREVIEW_LENGTH with
-        ellipsis if needed, with init commands converted to friendly descriptions,
-        and IDE tags replaced with compact emoji indicators.
+        ellipsis if needed, with command-tag XML stripped to its semantic
+        core (``/X``-style slash commands and ``<local-command-stdout>``
+        dialog hints), and IDE tags replaced with compact emoji
+        indicators.
+
+    The ``simplify_command_tags`` cleanup serves two distinct callers
+    that ended up wanting the same shape: branch headers (whose first
+    user entry is often a ``/exit`` slash command, formerly displayed
+    as the raw ``<command-name>/exit</command-name>...`` soup) and the
+    occasional session preview that does start with a slash command
+    (``init`` historically had a hardcoded English description here;
+    ``simplify_command_tags`` collapses it to ``/init`` instead — bare
+    legacy emissions are normalised to the ``/cmd`` shape so previews
+    stay consistent in mixed transcripts). #129.
     """
-    # Apply init command transformation first
-    preview_content = extract_init_command_description(text_content)
+    # Strip command-tag XML soup down to ``/cmd`` or inner-text shape.
+    preview_content = simplify_command_tags(text_content)
 
     # Apply compact IDE tag indicators BEFORE truncation
     preview_content = _compact_ide_tags_for_preview(preview_content)

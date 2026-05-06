@@ -569,7 +569,12 @@ class MarkdownRenderer(Renderer):
         parts: list[str] = []
         # Command name is in the title, only include args and contents here
         if content.command_args:
-            parts.append(f"**Args:** `{content.command_args}`")
+            # Use the adaptive inline-code helper: ``command_args`` is
+            # free-form user input that legitimately contains backticks
+            # (``run `date` && ...``). A naïve single-tick span would
+            # close at the first inner tick and emit a mix of plain text
+            # and unmatched ticks downstream.
+            parts.append(f"**Args:** {_inline_code(content.command_args)}")
         if content.command_contents:
             parts.append(self._code_fence(content.command_contents))
         return "\n\n".join(parts)
@@ -578,8 +583,11 @@ class MarkdownRenderer(Renderer):
         self, content: SlashCommandMessage, _message: TemplateMessage
     ) -> str:
         """Title → '🤷 Command `/cmd`'."""
-        # command_name already includes the leading slash
-        return f"🤷 Command `{content.command_name}`"
+        # command_name already includes the leading slash; harness emits
+        # short identifiers (no backticks) but use the adaptive helper
+        # for symmetry with the args site and to stay safe if the
+        # emission shape ever drifts.
+        return f"🤷 Command {_inline_code(content.command_name)}"
 
     def title_UserSlashCommandMessage(
         self, _content: UserSlashCommandMessage, _: TemplateMessage
@@ -597,7 +605,7 @@ class MarkdownRenderer(Renderer):
                 if (partner := self._ctx.get(partner_idx)) and isinstance(
                     partner.content, SlashCommandMessage
                 ):
-                    return f"🤷 Command `{partner.content.command_name}`"
+                    return f"🤷 Command {_inline_code(partner.content.command_name)}"
         # Fallback to base behaviour ("User (slash command)").
         return super().title_UserSlashCommandMessage(_content, _)
 
