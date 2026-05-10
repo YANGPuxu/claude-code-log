@@ -129,8 +129,16 @@ class ProjectCache(BaseModel):
 # ========== Helper Functions ==========
 
 
+# Lone HIGH surrogates (U+D800–U+DBFF) are not in surrogateescape's
+# back-mapping range (which only covers low surrogates U+DC80–U+DCFF
+# produced from raw byte decoding), so the surrogateescape-encode step
+# in scrub_surrogates would raise on them. Pre-substitute high
+# surrogates directly with U+FFFD before the encode step.
+_HIGH_SURROGATE_RE = re.compile(r"[\ud800-\udbff]")
+
+
 def scrub_surrogates(s: Optional[str]) -> Optional[str]:
-    """Replace lone surrogates (U+DC80…U+DCFF) with U+FFFD.
+    """Replace lone surrogates (U+D800…U+DFFF) with U+FFFD.
 
     Public helper used wherever ``surrogateescape``-decoded JSONL data
     might cross a strict-UTF-8 boundary (issue #139). Examples:
@@ -139,16 +147,27 @@ def scrub_surrogates(s: Optional[str]) -> Optional[str]:
     raise ``UnicodeEncodeError`` on lone surrogates the moment we try
     to persist them.
 
-    Encoding via ``surrogateescape`` (which round-trips lone surrogates
-    back to their raw bytes — ``\\udcb2`` → ``b"\\xb2"``) followed by
-    decoding with ``errors="replace"`` substitutes the invalid byte
-    sequences with the canonical Unicode replacement character U+FFFD
-    (``\\ufffd``). The simpler ``encode(..., errors="replace")``
-    round-trip would emit ASCII ``?`` (U+003F) instead — also valid
-    UTF-8, but a less informative sentinel.
+    Two ranges to handle, with two different mechanisms:
+
+    - **Low surrogates** (U+DC80…U+DCFF) — what ``surrogateescape``
+      uses when decoding raw bytes. ``encode("utf-8",
+      errors="surrogateescape")`` reverses the mapping back to the
+      original raw byte (``\\udcb2`` → ``b"\\xb2"``); the subsequent
+      ``decode("utf-8", errors="replace")`` then substitutes those
+      invalid bytes with U+FFFD on the decode side.
+    - **High surrogates** (U+D800…U+DBFF) — ``surrogateescape`` has
+      no mapping for these (they're not produced by raw-byte decoding),
+      so the encode step would raise ``UnicodeEncodeError``. Pre-scrub
+      them directly via regex substitution before the encode step.
+
+    Why not the simpler ``encode(..., errors="replace")``? That emits
+    ASCII ``?`` (U+003F) on encode rather than the canonical Unicode
+    replacement U+FFFD on decode — also valid UTF-8, but a less
+    informative sentinel.
     """
     if s is None:
         return None
+    s = _HIGH_SURROGATE_RE.sub("�", s)
     return s.encode("utf-8", errors="surrogateescape").decode("utf-8", errors="replace")
 
 

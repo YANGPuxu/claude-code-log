@@ -19,8 +19,6 @@ import pytest
 from claude_code_log.tui import SessionBrowser
 
 
-# Lone low surrogate U+DCB2 — what surrogateescape uses for byte 0xB2.
-LONE_SURROGATE = "\udcb2"
 REPLACEMENT_CHAR = "�"
 
 
@@ -55,18 +53,35 @@ class TestTUIExportSurrogateHandling:
     crash here would silently surface as 'Failed to generate' rather than
     a loud exception — bug-class worth a regression test."""
 
-    def test_session_export_scrubs_lone_surrogate(self, tmp_path: Path):
+    @pytest.mark.parametrize(
+        "surrogate",
+        [
+            # Low (surrogateescape-mapped) range — what byte-decoded
+            # JSONL produces.
+            "\udcb2",
+            # High range — explicit \uD800–\uDBFF escapes from upstream
+            # JSON. surrogateescape doesn't back-map these; scrub_surrogates
+            # pre-substitutes them via regex before the encode step.
+            "\ud800",
+        ],
+    )
+    def test_session_export_scrubs_lone_surrogate(self, tmp_path: Path, surrogate: str):
         """The renderer is mocked to return surrogate-bearing HTML; the
         on-disk file must be strict-UTF-8 decodable, the surrogate must
         be gone, and U+FFFD must be in its place (the canonical Unicode
-        replacement char that ``scrub_surrogates`` produces)."""
+        replacement char that ``scrub_surrogates`` produces).
+
+        Parametrized over both surrogate ranges (low and high) since
+        they're handled by different mechanisms inside
+        ``scrub_surrogates``: surrogateescape-encode for U+DC80–U+DCFF,
+        regex-presubstitute for U+D800–U+DBFF."""
         session_id = "11111111-1111-1111-1111-111111111111"
         _seed_project_with_session(tmp_path, session_id)
 
         # Surrogate-bearing content the renderer "would" emit. Pre-fix,
         # `Path.write_text(encoding="utf-8")` of this would crash.
         surrogate_html = (
-            f"<html><body><p>marker {LONE_SURROGATE} (issue #139 TUI)</p></body></html>"
+            f"<html><body><p>marker {surrogate} (issue #139 TUI)</p></body></html>"
         )
 
         browser = SessionBrowser(tmp_path)
@@ -108,9 +123,10 @@ class TestTUIExportSurrogateHandling:
         # somehow.
         on_disk = session_file.read_bytes().decode("utf-8")
         assert "issue #139 TUI" in on_disk
-        assert LONE_SURROGATE not in on_disk
+        assert surrogate not in on_disk
         # The surrogate should land as U+FFFD (canonical Unicode
         # replacement character), not ASCII '?' — we use the
         # `scrub_surrogates` helper which uses surrogateescape →
-        # decode-replace specifically to emit U+FFFD.
+        # decode-replace (low range) and regex pre-substitution (high
+        # range) specifically to emit U+FFFD.
         assert REPLACEMENT_CHAR in on_disk

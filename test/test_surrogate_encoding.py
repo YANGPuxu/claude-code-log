@@ -191,10 +191,26 @@ class TestSurrogateEncoding:
         assert LONE_SURROGATE not in page_2_html
 
 
-@pytest.mark.parametrize("surrogate", ["\udcb2", "\udc80", "\udcff"])
-def test_various_low_surrogates_handled(tmp_path: Path, surrogate: str):
-    """Spot-check across the surrogateescape range (U+DC80 … U+DCFF) that
-    every byte-mapped lone surrogate encodes safely."""
+@pytest.mark.parametrize(
+    "surrogate",
+    [
+        # Low (surrogateescape) range — what raw-byte decoding produces.
+        "\udc80",
+        "\udcb2",
+        "\udcff",
+        # High range — these don't come from surrogateescape decoding but
+        # CAN appear from explicit \uD800–\uDBFF JSON escapes upstream.
+        # They require a separate scrub mechanism (re.sub) because
+        # surrogateescape's encode step doesn't back-map them.
+        "\ud800",
+        "\udbff",
+    ],
+)
+def test_various_lone_surrogates_handled(tmp_path: Path, surrogate: str):
+    """Spot-check across the full lone-surrogate range (U+D800 … U+DFFF)
+    that every codepoint encodes safely. Both the surrogateescape-mapped
+    low range AND the high range that needs explicit pre-substitution
+    are covered."""
     jsonl_path = tmp_path / "session.jsonl"
     user_entry = {
         "parentUuid": None,
