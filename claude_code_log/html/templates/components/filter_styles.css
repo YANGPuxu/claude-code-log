@@ -133,6 +133,10 @@
     border-width: 2px;
 }
 
+.filter-toggle[data-type="sidechain"] {
+    border: dashed 2px #aaa;
+}
+
 .filter-actions {
     display: flex;
     gap: 6px;
