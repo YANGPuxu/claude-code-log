@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Union, Optional, Literal
+from typing import Any, ClassVar, Union, Optional, Literal
 
 from pydantic import BaseModel, Field
 
@@ -476,6 +476,12 @@ class AwaySummaryMessage(MessageContent):
     user comes back to a session. Distinct from HookSummaryMessage (tool noise)
     and the level-bearing SystemMessage (info/warning/error).
     """
+
+    # Recaps are narrative content, not noise: visible at FULL and HIGH,
+    # dropped at LOW and below (alongside bash/thinking). Declared via the
+    # class-attribute detail-visibility mechanism so the rule lives with the
+    # content type rather than in renderer.py's exclude registries.
+    detail_visibility: ClassVar[DetailLevel] = DetailLevel.HIGH
 
     text: str  # Recap prose; may contain light markdown.
 

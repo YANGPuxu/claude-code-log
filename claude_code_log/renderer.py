@@ -3169,14 +3169,13 @@ _HIGH_EXCLUDE_CLASSES: tuple[type[MessageContent], ...] = (
     UnknownMessage,
 )
 
-# AwaySummaryMessage is intentionally absent from _HIGH_EXCLUDE_CLASSES:
-# recaps are narrative content (has_markdown=True, assistant-side visual
-# treatment), not noise. They're kept at HIGH and dropped from LOW down,
-# alongside bash/thinking. The pre-render `_filter_by_detail` carries a
-# matching whitelist for SystemTranscriptEntry with subtype="away_summary".
+# AwaySummaryMessage is governed by its own class attribute
+# (detail_visibility = HIGH in models.py), not these registries: recaps are
+# narrative content (has_markdown=True, assistant-side visual treatment),
+# kept at HIGH and dropped from LOW down. The pre-render `_filter_by_detail`
+# carries a matching whitelist for SystemTranscriptEntry subtype="away_summary".
 _LOW_EXCLUDE_CLASSES: tuple[type[MessageContent], ...] = (
     *_HIGH_EXCLUDE_CLASSES,
-    AwaySummaryMessage,
     BashInputMessage,
     BashOutputMessage,
     ThinkingMessage,
@@ -3296,12 +3295,9 @@ def _filter_by_detail(
     filtered: list[TranscriptEntry] = []
     for message in messages:
         # HIGH/LOW/MINIMAL/USER_ONLY: drop system entries (factory creates SystemMessage)
-        # — except `away_summary` recaps at HIGH detail. Recaps are
-        # narrative content (Claude summarising recent activity); the
-        # post-render `_HIGH_EXCLUDE_CLASSES` keeps them by intentionally
-        # omitting AwaySummaryMessage, but they'd never reach that filter
-        # without this pre-render whitelist. At LOW and below, recaps are
-        # dropped along with bash/thinking via `_LOW_EXCLUDE_CLASSES`.
+        # — except `away_summary` recaps at HIGH detail, which must survive this
+        # pre-render pass to reach the post-render filter that keeps them at HIGH
+        # (see AwaySummaryMessage.detail_visibility in models.py).
         if not isinstance(message, allowed_types):
             if (
                 detail == DetailLevel.HIGH
