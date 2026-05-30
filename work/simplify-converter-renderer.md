@@ -23,8 +23,16 @@
 | 3 — fix-rendering-arch-doc | `fix-rendering-arch-doc` | [#178](https://github.com/daaain/claude-code-log/pull/178) | ✅ merged |
 | §7 — detail-visibility-method | `detail-visibility-method` | [#181](https://github.com/daaain/claude-code-log/pull/181) | ✅ merged |
 | 1 — pagination-token-dedup | `pagination-token-dedup` | [#182](https://github.com/daaain/claude-code-log/pull/182) | ✅ green — monk ✅, CI green, CodeRabbit clean (awaiting maintainer merge) |
-| 6 — factor-session-headers | `factor-session-headers` | [#183](https://github.com/daaain/claude-code-log/pull/183) | 🟡 in review (monk ✅; CI+CodeRabbit running) |
+| 6 — factor-session-headers | `factor-session-headers` | [#183](https://github.com/daaain/claude-code-log/pull/183) | monk ✅, local `just ci` green; CI+CodeRabbit deferred to merge-time¹ |
 | 7 — branch-label-source | `branch-label-source` | _pending_ | 🔄 in progress (alice, stacked on opp 6) |
+
+> ¹ **Stacked-PR CI/CodeRabbit nuance:** the test workflow triggers only on
+> `pull_request → main`, and CodeRabbit skips reviews on PRs whose base isn't
+> `main` ("Review skipped" on #183). So a stacked PR gets **no** CI/CodeRabbit
+> while its base is a feature branch. As the parent merges, GitHub auto-retargets
+> the child PR's base to `main`, which then fires its full CI + CodeRabbit on the
+> clean (atomic) diff. So progressive merging gives each PR its automated review
+> at merge-time — opp 1 (#182, base `main`) is the only one auto-validated now.
 | 8–12 — Wave C / D | — | — | ⏳ not started |
 
 **Current track (sequential):** opp 1 → opp 6 → opp 7. Branches are **stacked** —
