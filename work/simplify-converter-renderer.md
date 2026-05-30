@@ -24,7 +24,7 @@
 | §7 — detail-visibility-method | `detail-visibility-method` | [#181](https://github.com/daaain/claude-code-log/pull/181) | ✅ merged |
 | 1 — pagination-token-dedup | `pagination-token-dedup` | [#182](https://github.com/daaain/claude-code-log/pull/182) | ✅ green — monk ✅, CI green, CodeRabbit clean (awaiting maintainer merge) |
 | 6 — factor-session-headers | `factor-session-headers` | [#183](https://github.com/daaain/claude-code-log/pull/183) | monk ✅, local `just ci` green; CI+CodeRabbit deferred to merge-time¹ |
-| 7 — branch-label-source | `branch-label-source` | _pending_ | 🔄 in progress (alice, stacked on opp 6) |
+| 7 — branch-label-source | `branch-label-source` | [#184](https://github.com/daaain/claude-code-log/pull/184) | monk ✅, local `just ci` green; CI+CodeRabbit deferred to merge-time¹ (alice adding a follow-up agent-in-branch test) |
 
 > ¹ **Stacked-PR CI/CodeRabbit nuance:** the test workflow triggers only on
 > `pull_request → main`, and CodeRabbit skips reviews on PRs whose base isn't
@@ -35,10 +35,16 @@
 > at merge-time — opp 1 (#182, base `main`) is the only one auto-validated now.
 | 8–12 — Wave C / D | — | — | ⏳ not started |
 
-**Current track (sequential):** opp 1 → opp 6 → opp 7. Branches are **stacked** —
-each PR targets the previous branch (`--base`) until that branch merges, so
-CodeRabbit diffs only the new change. opp 1 lives in `converter.py`; opp 6/7 in
-`renderer.py` and overlap the branch-header block, so 7 must follow 6.
+**Current track (sequential): COMPLETE — all three PRs up, monk-approved.** opp 1 →
+opp 6 → opp 7. Branches are **stacked** — each PR targets the previous branch
+(`--base`) until that branch merges, so CodeRabbit diffs only the new change. opp 1
+lives in `converter.py`; opp 6/7 in `renderer.py` and overlap the branch-header
+block, so 7 must follow 6.
+
+**Maintainer merge sequence (when you're back):** merge **#182** (opp 1, base
+`main`, fully green) → GitHub retargets **#183** to `main`, its CI+CodeRabbit fire →
+merge #183 → #184 retargets to `main`, its CI+CodeRabbit fire → merge **#184**. Each
+gets full automated review on its clean diff at its merge step.
 
 ## 1. Executive summary
 
