@@ -50,7 +50,12 @@ from .models import (
     ToolUseContent,
 )
 from .dag import SessionTree, build_dag_from_entries, traverse_session_tree
-from .renderer import get_renderer, is_html_outdated
+from .renderer import (
+    get_renderer,
+    is_html_outdated,
+    prepare_session_ai_titles,
+    prepare_session_summaries,
+)
 
 
 @contextlib.contextmanager
@@ -1061,38 +1066,16 @@ def _build_session_data_from_messages(
     # Pre-compute warmup session IDs to filter them out
     warmup_session_ids = get_warmup_session_ids(messages)
 
-    # Map summaries to sessions via leafUuid -> message UUID -> session ID.
-    # Mirrors _update_cache_with_session_data so the title fallback chain
-    # (ai_title > summary > preview > id) survives the cache-miss path.
-    uuid_to_session: Dict[str, str] = {}
-    uuid_to_session_backup: Dict[str, str] = {}
-    for message in messages:
-        if hasattr(message, "uuid") and hasattr(message, "sessionId"):
-            message_uuid = getattr(message, "uuid", "")
-            session_id = getattr(message, "sessionId", "")
-            if message_uuid and session_id:
-                if type(message) is AssistantTranscriptEntry:
-                    uuid_to_session[message_uuid] = session_id
-                else:
-                    uuid_to_session_backup[message_uuid] = session_id
-
-    session_summaries: Dict[str, str] = {}
-    for message in messages:
-        if isinstance(message, SummaryTranscriptEntry):
-            leaf_uuid = message.leafUuid
-            if leaf_uuid in uuid_to_session:
-                session_summaries[uuid_to_session[leaf_uuid]] = message.summary
-            elif (
-                leaf_uuid in uuid_to_session_backup
-                and uuid_to_session_backup[leaf_uuid] not in session_summaries
-            ):
-                session_summaries[uuid_to_session_backup[leaf_uuid]] = message.summary
-
-    # Map AI-generated titles to sessions (last entry per sessionId wins).
-    session_ai_titles: Dict[str, str] = {}
-    for message in messages:
-        if isinstance(message, AiTitleTranscriptEntry):
-            session_ai_titles[message.sessionId] = message.aiTitle
+    # Map summaries + ai-titles to sessions. Both helpers also drive
+    # the renderer's session-header path, so routing the cache-miss
+    # fallback through them single-sources the leafUuid → summary
+    # chain (and the AssistantTranscriptEntry-prioritised
+    # uuid_to_session lookup it relies on). They stay as separate
+    # dicts here because ``SessionCacheData`` exposes ``summary`` and
+    # ``ai_title`` as distinct fields; the precedence collapse
+    # (ai_title > summary) happens at the display layer, not here.
+    session_summaries = prepare_session_summaries(messages)
+    session_ai_titles = prepare_session_ai_titles(messages)
 
     # Group messages by session
     sessions: Dict[str, Dict[str, Any]] = {}
@@ -1783,39 +1766,16 @@ def _update_cache_with_session_data(
     """Update cache with session and project aggregate data."""
     from .parser import extract_text_content
 
-    # Collect session data (similar to _collect_project_sessions but for cache)
-    session_summaries: dict[str, str] = {}
-    uuid_to_session: dict[str, str] = {}
-    uuid_to_session_backup: dict[str, str] = {}
-
-    # Build mapping from message UUID to session ID
-    for message in messages:
-        if hasattr(message, "uuid") and hasattr(message, "sessionId"):
-            message_uuid = getattr(message, "uuid", "")
-            session_id = getattr(message, "sessionId", "")
-            if message_uuid and session_id:
-                if type(message) is AssistantTranscriptEntry:
-                    uuid_to_session[message_uuid] = session_id
-                else:
-                    uuid_to_session_backup[message_uuid] = session_id
-
-    # Map summaries to sessions
-    for message in messages:
-        if isinstance(message, SummaryTranscriptEntry):
-            leaf_uuid = message.leafUuid
-            if leaf_uuid in uuid_to_session:
-                session_summaries[uuid_to_session[leaf_uuid]] = message.summary
-            elif (
-                leaf_uuid in uuid_to_session_backup
-                and uuid_to_session_backup[leaf_uuid] not in session_summaries
-            ):
-                session_summaries[uuid_to_session_backup[leaf_uuid]] = message.summary
-
-    # Map AI-generated titles to sessions (last entry per sessionId wins).
-    session_ai_titles: dict[str, str] = {}
-    for message in messages:
-        if isinstance(message, AiTitleTranscriptEntry):
-            session_ai_titles[message.sessionId] = message.aiTitle
+    # Map summaries + ai-titles via the shared helpers. Both feed
+    # ``SessionCacheData``'s separate ``summary`` and ``ai_title``
+    # fields, so we keep two dicts here (the ai_title > summary
+    # precedence collapse happens at the display layer). Single-
+    # sourcing this with the renderer's session-header path means the
+    # leafUuid → summary chain (which prioritises
+    # ``AssistantTranscriptEntry`` lookups over Pydantic-backup
+    # lookups) is documented in exactly one place.
+    session_summaries = prepare_session_summaries(messages)
+    session_ai_titles = prepare_session_ai_titles(messages)
 
     # Group messages by session and calculate session data
     sessions_cache_data: dict[str, SessionCacheData] = {}
@@ -1958,44 +1918,18 @@ def _collect_project_sessions(messages: list[TranscriptEntry]) -> list[dict[str,
     # Pre-compute warmup session IDs to filter them out
     warmup_session_ids = get_warmup_session_ids(messages)
 
-    # Pre-process to find and attach session summaries
-    # This matches the logic from renderer.py generate_html() exactly
-    session_summaries: dict[str, str] = {}
-    uuid_to_session: dict[str, str] = {}
-    uuid_to_session_backup: dict[str, str] = {}
-
-    # Build mapping from message UUID to session ID across ALL messages
-    # This allows summaries from later sessions to be matched to earlier sessions
-    for message in messages:
-        if hasattr(message, "uuid") and hasattr(message, "sessionId"):
-            message_uuid = getattr(message, "uuid", "")
-            session_id = getattr(message, "sessionId", "")
-            if message_uuid and session_id:
-                # There is often duplication, in that case we want to prioritise the assistant
-                # message because summaries are generated from Claude's (last) success message
-                if type(message) is AssistantTranscriptEntry:
-                    uuid_to_session[message_uuid] = session_id
-                else:
-                    uuid_to_session_backup[message_uuid] = session_id
-
-    # Map summaries to sessions via leafUuid -> message UUID -> session ID
-    # Summaries can be in different sessions than the messages they summarize
-    for message in messages:
-        if isinstance(message, SummaryTranscriptEntry):
-            leaf_uuid = message.leafUuid
-            if leaf_uuid in uuid_to_session:
-                session_summaries[uuid_to_session[leaf_uuid]] = message.summary
-            elif (
-                leaf_uuid in uuid_to_session_backup
-                and uuid_to_session_backup[leaf_uuid] not in session_summaries
-            ):
-                session_summaries[uuid_to_session_backup[leaf_uuid]] = message.summary
-
-    # Overlay AI-generated titles (last per session wins) — these take
-    # precedence over leafUuid-mapped summaries for display purposes.
-    for message in messages:
-        if isinstance(message, AiTitleTranscriptEntry):
-            session_summaries[message.sessionId] = message.aiTitle
+    # Pre-process to find and attach session summaries via the shared
+    # helpers, then overlay AI-generated titles directly into the
+    # same dict — projects-index nav exposes only ONE display field
+    # per session, with ai_title taking precedence over leafUuid-
+    # mapped summary. Using ``dict.update`` (last-write-wins per
+    # sessionId) reproduces the original loop's semantics exactly
+    # (and matches ``prepare_session_ai_titles``'s own last-entry-
+    # wins). NOT introducing a separate dict here is deliberate:
+    # that would surface as a behavior change (ai-title precedence
+    # would be dropped).
+    session_summaries = prepare_session_summaries(messages)
+    session_summaries.update(prepare_session_ai_titles(messages))
 
     # Group messages by session (excluding warmup-only sessions,
     # coalescing agent sessions into their parent)
