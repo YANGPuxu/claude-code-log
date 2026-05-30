@@ -114,51 +114,6 @@ def get_index_filename(format: str) -> str:
     return "all-projects-summary.json" if ext == "json" else f"index.{ext}"
 
 
-# =============================================================================
-# Progress Chain Repair
-# =============================================================================
-
-
-def _scan_file_progress(path: Path, chain: dict[str, Optional[str]]) -> None:
-    """Extract progress entry uuid->parentUuid from a single JSONL file."""
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                if "progress" not in line:  # Fast pre-filter
-                    continue
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    raw = json.loads(line)
-                    if not isinstance(raw, dict):
-                        continue
-                    d = cast(dict[str, Any], raw)
-                    if d.get("type") == "progress":
-                        uuid = d.get("uuid")
-                        if isinstance(uuid, str):
-                            chain[uuid] = d.get("parentUuid")
-                except json.JSONDecodeError:
-                    continue
-    except FileNotFoundError:
-        pass  # Race condition: file may have been deleted
-
-
-def _scan_progress_chains(*paths: Path) -> dict[str, Optional[str]]:
-    """Fast scan of JSONL files for progress entry uuid->parentUuid mappings."""
-    chain: dict[str, Optional[str]] = {}
-    for path in paths:
-        if path.is_file():
-            _scan_file_progress(path, chain)
-        elif path.is_dir():
-            for f in path.glob("*.jsonl"):
-                _scan_file_progress(f, chain)
-            # Also scan subagent directories
-            for f in path.glob("*/subagents/*.jsonl"):
-                _scan_file_progress(f, chain)
-    return chain
-
-
 def _scan_sidechain_uuids(directory: Path) -> set[str]:
     """Collect UUIDs from sidechain/subagent files not loaded into the DAG.
 
@@ -186,44 +141,6 @@ def _scan_sidechain_uuids(directory: Path) -> set[str]:
         except FileNotFoundError:
             pass
     return uuids
-
-
-def _repair_parent_chains(
-    messages: list[TranscriptEntry],
-    progress_chain: dict[str, Optional[str]],
-) -> None:
-    """Repair parentUuid fields that point to dropped progress entries.
-
-    Walks the progress chain to find the nearest non-progress ancestor.
-    Only repairs links to progress entries that are NOT in the messages
-    list (i.e. those that were truly dropped, not preserved as
-    PassthroughTranscriptEntry).
-    Mutates entries in place (Pydantic v2 models are mutable by default).
-    """
-    if not progress_chain:
-        return
-    # Filter out progress UUIDs that are present as parsed entries —
-    # those are PassthroughTranscriptEntry nodes in the DAG and valid parents.
-    present_uuids = {getattr(m, "uuid", None) for m in messages}
-    dropped_progress = {
-        uuid: parent
-        for uuid, parent in progress_chain.items()
-        if uuid not in present_uuids
-    }
-    if not dropped_progress:
-        return
-    for msg in messages:
-        parent = getattr(msg, "parentUuid", None)
-        if parent and parent in dropped_progress:
-            current: Optional[str] = parent
-            seen: set[str] = set()
-            while current is not None and current in dropped_progress:
-                if current in seen:
-                    current = None
-                    break
-                seen.add(current)
-                current = dropped_progress[current]
-            msg.parentUuid = current  # type: ignore[union-attr]
 
 
 # =============================================================================
@@ -756,10 +673,6 @@ def load_directory_transcripts(
             jsonl_file, cache_manager, from_date, to_date, silent
         )
         all_messages.extend(messages)
-
-    # Repair parent chains: progress entries create UUID gaps
-    progress_chain = _scan_progress_chains(directory_path)
-    _repair_parent_chains(all_messages, progress_chain)
 
     # Parent agent entries and assign synthetic session IDs so they
     # form separate DAG-lines spliced at their anchor points.
@@ -1580,9 +1493,6 @@ def convert_jsonl_to(
         if output_path is None:
             output_path = input_path.with_suffix(f"{suffix}.{ext}")
         messages = load_transcript(input_path, silent=silent)
-        # Repair progress chain gaps for single-file mode
-        progress_chain = _scan_progress_chains(input_path)
-        _repair_parent_chains(messages, progress_chain)
         # Parent agent entries and assign synthetic session IDs (same as
         # directory mode) so DAG-based ordering handles sidechain placement.
         _integrate_agent_entries(messages)

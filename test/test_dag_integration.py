@@ -13,11 +13,8 @@ from typing import Any
 from claude_code_log.converter import (
     load_directory_transcripts,
     _build_session_data_from_messages,
-    _scan_progress_chains,
-    _repair_parent_chains,
 )
 from claude_code_log.models import (
-    BaseTranscriptEntry,
     SummaryTranscriptEntry,
     QueueOperationTranscriptEntry,
 )
@@ -431,118 +428,17 @@ def _make_progress_entry(uuid: str, parent_uuid: str | None = None) -> dict[str,
     }
 
 
-class TestScanProgressChains:
-    """Unit tests for _scan_progress_chains helper."""
+class TestProgressEntryPassthrough:
+    """Progress entries are bridged into the DAG as PassthroughTranscriptEntry.
 
-    def test_scan_empty_directory(self, tmp_path: Path) -> None:
-        """Empty directory produces empty chain."""
-        chain = _scan_progress_chains(tmp_path)
-        assert chain == {}
+    Historically a `_scan_progress_chains` / `_repair_parent_chains` pass
+    rewrote parentUuids around dropped `progress` entries. Once `progress`
+    entries (which carry uuid+sessionId) became `PassthroughTranscriptEntry`
+    nodes, that repair became a no-op and was removed; these tests pin the
+    behaviour the Passthrough mechanism now provides on its own.
+    """
 
-    def test_scan_file_with_no_progress(self, tmp_path: Path) -> None:
-        """File with no progress entries produces empty chain."""
-        entries = [
-            _make_user_entry("a", "s1", "2025-07-01T10:00:00.000Z", None),
-        ]
-        _write_jsonl(tmp_path / "session.jsonl", entries)
-        chain = _scan_progress_chains(tmp_path)
-        assert chain == {}
-
-    def test_scan_file_with_progress(self, tmp_path: Path) -> None:
-        """File with progress entries produces correct chain."""
-        entries = [
-            _make_progress_entry("p1", None),
-            _make_user_entry("a", "s1", "2025-07-01T10:00:00.000Z", "p1"),
-            _make_progress_entry("p2", "a"),
-        ]
-        _write_jsonl(tmp_path / "session.jsonl", entries)
-        chain = _scan_progress_chains(tmp_path)
-        assert chain == {"p1": None, "p2": "a"}
-
-    def test_scan_single_file_path(self, tmp_path: Path) -> None:
-        """Can scan a single file (not just a directory)."""
-        entries = [_make_progress_entry("p1", "parent1")]
-        path = tmp_path / "session.jsonl"
-        _write_jsonl(path, entries)
-        chain = _scan_progress_chains(path)
-        assert chain == {"p1": "parent1"}
-
-    def test_scan_real_data(self) -> None:
-        """Scan real test data with 11 progress entries."""
-        chain = _scan_progress_chains(EXPERIMENTS_IDEAS_DIR)
-        assert len(chain) == 11
-
-
-class TestRepairParentChains:
-    """Unit tests for _repair_parent_chains helper."""
-
-    def test_no_progress_noop(self, tmp_path: Path) -> None:
-        """No progress entries means no repairs needed."""
-        entries = [
-            _make_user_entry("a", "s1", "2025-07-01T10:00:00.000Z", None),
-            _make_assistant_entry("b", "s1", "2025-07-01T10:01:00.000Z", "a"),
-        ]
-        _write_jsonl(tmp_path / "session.jsonl", entries)
-        from claude_code_log.converter import load_transcript
-
-        messages = load_transcript(tmp_path / "session.jsonl", silent=True)
-        _repair_parent_chains(messages, {})
-        assert isinstance(messages[0], BaseTranscriptEntry)
-        assert isinstance(messages[1], BaseTranscriptEntry)
-        assert messages[0].parentUuid is None
-        assert messages[1].parentUuid == "a"
-
-    def test_single_progress_gap(self, tmp_path: Path) -> None:
-        """Progress entry with uuid+sessionId becomes PassthroughTranscriptEntry.
-
-        With passthrough entries in the DAG, the chain is intact —
-        no repair needed for progress entries that have uuid+sessionId.
-        """
-        from claude_code_log.models import PassthroughTranscriptEntry
-
-        entries = [
-            _make_progress_entry("p1", None),
-            _make_user_entry("a", "s1", "2025-07-01T10:00:00.000Z", "p1"),
-        ]
-        _write_jsonl(tmp_path / "session.jsonl", entries)
-        from claude_code_log.converter import load_transcript
-
-        messages = load_transcript(tmp_path / "session.jsonl", silent=True)
-        progress_chain = {"p1": None}
-        _repair_parent_chains(messages, progress_chain)
-        # p1 is now a PassthroughTranscriptEntry (not dropped)
-        assert isinstance(messages[0], PassthroughTranscriptEntry)
-        assert messages[0].uuid == "p1"
-        # user(a).parentUuid remains "p1" — chain intact via passthrough
-        user_a = [m for m in messages if getattr(m, "uuid", None) == "a"][0]
-        assert isinstance(user_a, BaseTranscriptEntry)
-        assert user_a.parentUuid == "p1"
-
-    def test_chained_progress_gap(self, tmp_path: Path) -> None:
-        """Chain of passthrough progress entries preserves DAG links."""
-        # real_parent → progress(p1) → progress(p2) → user(a)
-        entries = [
-            _make_user_entry("real_parent", "s1", "2025-07-01T10:00:00.000Z", None),
-            _make_progress_entry("p1", "real_parent"),
-            _make_progress_entry("p2", "p1"),
-            _make_user_entry("a", "s1", "2025-07-01T10:01:00.000Z", "p2"),
-        ]
-        _write_jsonl(tmp_path / "session.jsonl", entries)
-        from claude_code_log.converter import load_transcript
-
-        messages = load_transcript(tmp_path / "session.jsonl", silent=True)
-        progress_chain = {"p1": "real_parent", "p2": "p1"}
-        _repair_parent_chains(messages, progress_chain)
-        # With passthrough entries, chain is intact: a → p2 → p1 → real_parent
-        user_a = [m for m in messages if getattr(m, "uuid", None) == "a"][0]
-        assert isinstance(user_a, BaseTranscriptEntry)
-        assert user_a.parentUuid == "p2"  # NOT repaired — p2 is in the DAG
-
-
-class TestProgressChainRepairIntegration:
-    """Integration tests for progress chain repair in load_directory_transcripts."""
-
-    def test_progress_chain_repair_directory(self, caplog: Any) -> None:
+    def test_no_orphan_warnings_from_progress_entries(self, caplog: Any) -> None:
         """Progress entries are bridged: no orphan warnings from DAG build."""
         with caplog.at_level(logging.WARNING):
             result, _ = load_directory_transcripts(EXPERIMENTS_IDEAS_DIR, silent=True)
@@ -558,17 +454,10 @@ class TestProgressChainRepairIntegration:
             f"Expected no orphan warnings, got: {orphan_warnings}"
         )
 
-    def test_progress_chain_repair_single_file(self) -> None:
-        """Single-file mode: progress entries are PassthroughTranscriptEntry nodes.
-
-        With passthrough entries, progress entries are in the DAG and don't
-        need repair. Entries pointing to them have valid parents.
-        """
-        from claude_code_log.converter import (
-            load_transcript,
-            _scan_progress_chains,
-            _repair_parent_chains,
-        )
+    def test_progress_entries_become_passthrough_real_data(self) -> None:
+        """Real-data single file: progress entries land as Passthrough nodes
+        and downstream entries still point at them (chain intact, no repair)."""
+        from claude_code_log.converter import load_transcript
         from claude_code_log.models import PassthroughTranscriptEntry
 
         single_file = (
@@ -576,45 +465,22 @@ class TestProgressChainRepairIntegration:
         )
         messages = load_transcript(single_file, silent=True)
 
-        # Progress entries are now PassthroughTranscriptEntry in messages
-        progress_chain = _scan_progress_chains(single_file)
-        assert len(progress_chain) == 11
-
-        # Progress entries should be in the messages list
-        passthrough_uuids = {
+        # Progress entries are present in the messages list as Passthrough nodes
+        progress_uuids = {
             m.uuid
             for m in messages
             if isinstance(m, PassthroughTranscriptEntry) and m.type == "progress"
         }
-        assert len(passthrough_uuids) > 0
+        assert len(progress_uuids) > 0
 
-        # Repair should be a no-op since all progress entries are present
-        _repair_parent_chains(messages, progress_chain)
-
-        # Entries still point to progress UUIDs (which is correct —
-        # those are valid PassthroughTranscriptEntry nodes in the DAG)
+        # Entries point at those progress UUIDs — valid DAG nodes, no repair needed
         entries_with_progress_parents = sum(
-            1 for m in messages if getattr(m, "parentUuid", None) in progress_chain
+            1 for m in messages if getattr(m, "parentUuid", None) in progress_uuids
         )
-        assert entries_with_progress_parents > 0  # Chain intact through passthrough
-
-    def test_progress_chain_preserves_entry_count(self) -> None:
-        """Repair doesn't add or remove entries, only mutates parentUuid."""
-        from claude_code_log.converter import load_transcript
-
-        single_file = (
-            EXPERIMENTS_IDEAS_DIR / "03eb5929-52b3-4b13-ada3-b93ae35806b8.jsonl"
-        )
-        messages = load_transcript(single_file, silent=True)
-        count_before = len(messages)
-
-        progress_chain = _scan_progress_chains(single_file)
-        _repair_parent_chains(messages, progress_chain)
-
-        assert len(messages) == count_before
+        assert entries_with_progress_parents > 0
 
     def test_dag_chain_fully_connected(self) -> None:
-        """After repair, DAG build produces a single connected chain."""
+        """DAG build over real data produces a connected chain."""
         from claude_code_log.dag import build_dag_from_entries
 
         result, _ = load_directory_transcripts(EXPERIMENTS_IDEAS_DIR, silent=True)
