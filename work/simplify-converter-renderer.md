@@ -23,9 +23,16 @@
 | 3 — fix-rendering-arch-doc | `fix-rendering-arch-doc` | [#178](https://github.com/daaain/claude-code-log/pull/178) | ✅ merged |
 | §7 — detail-visibility-method | `detail-visibility-method` | [#181](https://github.com/daaain/claude-code-log/pull/181) | ✅ merged |
 | 1 — pagination-token-dedup | `pagination-token-dedup` | [#182](https://github.com/daaain/claude-code-log/pull/182) | ✅ green — monk ✅, CI green, CodeRabbit clean (awaiting maintainer merge) |
-| 6 — factor-session-headers | `factor-session-headers` | [#183](https://github.com/daaain/claude-code-log/pull/183) | monk ✅, local `just ci` green; CI+CodeRabbit deferred to merge-time¹ |
-| 7 — branch-label-source | `branch-label-source` | [#184](https://github.com/daaain/claude-code-log/pull/184) | monk ✅, local `just ci` green; CI+CodeRabbit deferred to merge-time¹ (alice adding a follow-up agent-in-branch test) |
+| 6 — factor-session-headers | `factor-session-headers` | [#183](https://github.com/daaain/claude-code-log/pull/183) | ✅ rebased onto main (`50850de`), monk ✅, CodeRabbit clean² — **ready to merge** (CI accepted at merge-time) |
+| 7 — branch-label-source | `branch-label-source` | [#184](https://github.com/daaain/claude-code-log/pull/184) | monk ✅, rebased stacked (`295a84e`), CodeRabbit² found 2 minor doc nits → fixed; CI merge-gated until #183 lands |
 
+> ² **Recovering CodeRabbit on a retargeted stacked PR:** retargeting a PR's base
+> to `main` is an `edited` event — it triggers neither CI nor a fresh CodeRabbit
+> review. Post `@coderabbitai full review` to force the review (worked on #183 +
+> #184). For CI on a retargeted PR, a new `synchronize`/`reopened` event is needed.
+> Hypothesis to test on #184 when #183 lands: retarget base→main *first*, then
+> force-push, so the force-push fires both CI and CodeRabbit at base=main.
+>
 > ¹ **Stacked-PR CI/CodeRabbit nuance:** the test workflow triggers only on
 > `pull_request → main`, and CodeRabbit skips reviews on PRs whose base isn't
 > `main` ("Review skipped" on #183). So a stacked PR gets **no** CI/CodeRabbit
