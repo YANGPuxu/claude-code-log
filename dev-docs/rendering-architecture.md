@@ -224,8 +224,10 @@ In code order, `generate_template_messages`:
    `_render_messages` (**Phase 1**: wrappers, session headers,
    registration), then `_pair_skill_tool_uses` (which calls
    `_reindex_filtered_context` internally).
-4. **Branch / junction linking** — `_enrich_branch_titles`, then
-   junction forward-link population on fork points.
+4. **Junction linking** — junction forward-link population on fork
+   points (`_link_junction_forwards`). Branch-header previews are
+   computed in step 3 by `_build_branch_header` scanning the
+   branch's DAG-line uuids; there's no separate back-fill pass.
 5. **Post-render detail filter** — `_filter_template_by_detail`
    followed immediately by `_reindex_filtered_context` (only below FULL).
 6. **Nav + structure** — `prepare_session_navigation`, then

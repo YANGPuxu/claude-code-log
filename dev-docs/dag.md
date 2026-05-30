@@ -102,9 +102,8 @@ Where `s1`, `s2`, `s3` are synthesized session header messages.
 > <preview>` text) are assembled is a renderer concern, not a DAG
 > concern. See the `SessionHeaderMessage` glossary entry in
 > [application_model.md](application_model.md#4-cross-cutting-glossary)
-> for the four functions involved (`_branch_label`,
-> `_enrich_branch_titles`, `create_session_preview`,
-> `simplify_command_tags`).
+> for the functions involved (`_branch_label`, `_build_branch_header`,
+> `create_session_preview`, `simplify_command_tags`).
 
 #### Current: `d-{index}` anchors (combined transcript only)
 

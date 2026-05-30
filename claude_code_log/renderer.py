@@ -722,17 +722,6 @@ def generate_template_messages(
     with log_timing("Pair Skill tool_uses", t_start):
         _pair_skill_tool_uses(ctx)
 
-    # Branch headers were composed by ``_render_messages`` based on the
-    # branch's first message — but real branches sometimes start with an
-    # assistant entry (e.g. "No response requested." after a `/exit`),
-    # leaving the body header bare ``Branch • <uuid8>``. Walk the branch
-    # contents now that ``ctx.messages`` is final, lift the first
-    # UserTextMessage's text as the preview, and re-label the branch
-    # header. This keeps the body header, the session/graph index, and
-    # the fork-point box all carrying the same ``Branch • <uuid8> •
-    # <preview>`` string.
-    _enrich_branch_titles(ctx)
-
     # Populate junction forward links on fork-point messages
     with log_timing("Link junction forwards", t_start):
         _link_junction_forwards(ctx)
@@ -894,6 +883,13 @@ def _extract_session_hierarchy(
             "is_branch": dag_line.is_branch,
             "original_session_id": dag_line.original_session_id,
             "first_uuid": dag_line.uuids[0] if dag_line.uuids else None,
+            # Full DAG-line uuid sequence. ``_build_branch_header``
+            # scans this to find the first user entry with text for
+            # the branch preview — needed when the branch's first
+            # entry is an assistant turn (e.g. "No response requested."
+            # after ``/exit``) and the trigger-message-only path
+            # would leave the preview empty.
+            "uuids": list(dag_line.uuids),
         }
 
     junction_targets: dict[str, list[str]] = {}
@@ -975,77 +971,6 @@ def prepare_session_summaries(messages: list[TranscriptEntry]) -> dict[str, str]
                 session_summaries[uuid_to_session_backup[leaf_uuid]] = message.summary
 
     return session_summaries
-
-
-def _enrich_branch_titles(ctx: RenderingContext) -> None:
-    """Lift each branch's first UserTextMessage as the header preview.
-
-    ``_render_messages`` sets the branch header title from the branch's
-    very first transcript entry. That fails when a branch starts with an
-    assistant turn (a "No response requested." after ``/exit``) or with a
-    tool_result — the user content arrives later. This pass scans the
-    final ``ctx.messages`` list, picks the first ``UserTextMessage``
-    associated with each branch's render_session_id, and re-labels the
-    header (sets both ``content.preview`` and ``content.title``) only
-    when the original pass left no preview behind. We never overwrite a
-    real preview the original pass captured — including short
-    slash-command captures like ``"/exit"`` — because the scanned
-    UserTextMessage may be less informative even when longer.
-
-    Run after ``_pair_skill_tool_uses`` so the message set is stable
-    (skill-folded slash commands removed, indices re-mapped). Idempotent.
-    """
-    branch_headers: dict[str, "TemplateMessage"] = {}
-    for msg in ctx.messages:
-        if isinstance(msg.content, SessionHeaderMessage) and msg.content.is_branch:
-            branch_headers.setdefault(msg.content.session_id, msg)
-
-    if not branch_headers:
-        return
-
-    # First user-text per branch sid (preserves chronological order from ctx.messages).
-    first_user_text: dict[str, str] = {}
-    for msg in ctx.messages:
-        rsid = msg.render_session_id
-        if rsid not in branch_headers or rsid in first_user_text:
-            continue
-        if not isinstance(msg.content, UserTextMessage):
-            continue
-        # Skip sub-agent / sidechain user prompts. ``render_session_id``
-        # for an agent's wrapped messages can be set to the agent's
-        # parent_session_id (i.e. a branch sid), so without this guard
-        # an agent's first inner user prompt could be lifted as the
-        # branch's preview instead of the actual branch-local human
-        # turn. See ``_render_messages`` agent-parent handling.
-        if msg.is_sidechain:
-            continue
-        parts = [
-            item.text for item in msg.content.items if isinstance(item, TextContent)
-        ]
-        text = " ".join(p for p in parts if p).strip()
-        if text:
-            first_user_text[rsid] = create_session_preview(text)
-
-    for sid, header in branch_headers.items():
-        scanned = first_user_text.get(sid, "")
-        if not scanned:
-            continue
-        # Only widen when the existing preview is empty or is the
-        # bare UUID-only fallback (i.e. the original
-        # ``_render_messages`` pass found nothing useful — the branch
-        # started with an assistant or tool_result). A real preview
-        # already on the header — including short slash-command bodies
-        # like ``"/exit"`` (5 chars) — must not be replaced by a longer
-        # but less informative scan result. The earlier
-        # length-comparison heuristic conflated "longer" with "more
-        # informative" and lost slash-command captures in pathological
-        # cases.
-        content = header.content
-        assert isinstance(content, SessionHeaderMessage)  # branch_headers filter
-        if content.preview:
-            continue
-        content.preview = scanned
-        content.title = _branch_label(sid, scanned)
 
 
 def branch_short_uuid(branch_sid: str) -> str:
@@ -1318,13 +1243,13 @@ def prepare_session_navigation(
     # Add branch pseudo-sessions from hierarchy
     if session_hierarchy:
         # Lift each branch's raw ``preview`` directly off its
-        # SessionHeaderMessage. The body header path
-        # (``_render_messages``) already extracted text from the
-        # branch's first user entry — handling plain text, slash
+        # SessionHeaderMessage. ``_build_branch_header`` already
+        # computed it by scanning the branch's DAG-line for the first
+        # user entry with non-empty text — handling plain text, slash
         # commands and other user shapes uniformly via
-        # ``extract_text_content`` — and stored the result; the
-        # ``_enrich_branch_titles`` post-pass widens it when the first
-        # entry was an assistant. We just read what's there.
+        # ``extract_text_content``, including the assistant-start
+        # case (the post-pass ``_enrich_branch_titles`` used to
+        # back-fill). We just read what's there.
         branch_previews: dict[str, str] = {}
         for msg in ctx.messages:
             if not isinstance(msg.content, SessionHeaderMessage):
@@ -3699,14 +3624,17 @@ def _build_branch_header(
     session_hierarchy: dict[str, dict[str, Any]] | None,
     session_summaries: dict[str, str] | None,
     session_team_names: dict[str, str] | None,
+    uuid_to_entry: dict[str, TranscriptEntry] | None,
     ctx: RenderingContext,
 ) -> SessionHeaderMessage:
     """Build the SessionHeaderMessage content for a within-session
     branch (fork) when first encountered. ``message`` is the first
-    entry of the branch — used to extract the preview text. Caller
-    handles ``TemplateMessage`` wrapping, ``render_session_id`` tagging,
-    ``ctx.register(...)``, and ``ctx.session_first_message`` updates so
-    positional placement (anchor stability) stays in the render loop.
+    entry of the branch (the trigger that opened the helper) and
+    ``uuid_to_entry`` is the DAG-line uuid → entry map used to scan
+    for the branch preview. Caller handles ``TemplateMessage``
+    wrapping, ``render_session_id`` tagging, ``ctx.register(...)``,
+    and ``ctx.session_first_message`` updates so positional placement
+    (anchor stability) stays in the render loop.
     """
     b_hier = (session_hierarchy or {}).get(branch_sid, {})
     parent_sid = b_hier.get("parent_session_id")
@@ -3724,13 +3652,41 @@ def _build_branch_header(
     original_sid = b_hier.get("original_session_id", message.sessionId)
     branch_summary = (session_summaries or {}).get(original_sid)
 
-    # Extract preview from the branch's first user message
+    # Compute the branch preview by scanning the branch's DAG-line
+    # uuids for the first user entry with non-empty text. This is the
+    # single source of truth for the preview — there is no post-pass
+    # widening it later.
+    #
+    # Why scan instead of just inspecting ``message`` (the trigger)?
+    # Branches sometimes start with an assistant turn ("No response
+    # requested." after ``/exit``) or a tool_result, leaving the
+    # trigger with no user text. The trigger-only path used to leave
+    # the preview empty and a separate ``_enrich_branch_titles`` pass
+    # would walk ``ctx.messages`` post-hoc to back-fill. Scanning the
+    # DAG-line uuids in order achieves the same outcome in one pass.
+    #
+    # ``extract_text_content`` is the same helper the
+    # ``UserSlashCommandMessage`` path uses, so slash-command bodies
+    # like ``<command-name>/exit</command-name>...`` collapse to
+    # ``/exit`` (5 chars) via ``create_session_preview`` — #129
+    # precedence is preserved structurally: a slash command at the
+    # branch root is the *first* user entry with text, so the scan
+    # picks it before any later (longer but less informative) user
+    # turn ever gets considered.
+    branch_uuids: list[str] = b_hier.get("uuids") or []
     branch_preview = ""
-    user_entry = as_user_entry(message)
-    if user_entry is not None:
-        branch_text = extract_text_content(user_entry.message.content)
-        if branch_text:
-            branch_preview = create_session_preview(branch_text)
+    if uuid_to_entry:
+        for branch_uuid in branch_uuids:
+            entry = uuid_to_entry.get(branch_uuid)
+            if entry is None:
+                continue
+            user_entry = as_user_entry(entry)
+            if user_entry is None:
+                continue
+            branch_text = extract_text_content(user_entry.message.content)
+            if branch_text:
+                branch_preview = create_session_preview(branch_text)
+                break
     branch_title = _branch_label(branch_sid, branch_preview)
 
     branch_header_meta = MessageMeta(
@@ -3816,6 +3772,18 @@ def _render_messages(
             if hier.get("is_branch") and hier.get("first_uuid"):
                 branch_start_uuids[hier["first_uuid"]] = sid
 
+    # uuid → entry map for branch-preview scanning. ``_build_branch_header``
+    # walks each branch's DAG-line uuids (from ``session_hierarchy[sid]
+    # ["uuids"]``) and looks up the entries here to find the first user
+    # entry with non-empty text. Built once over the filtered message
+    # list; entries removed by structural filtering are simply absent
+    # from the map and skipped by the scan.
+    uuid_to_entry: dict[str, TranscriptEntry] = {}
+    for entry in messages:
+        entry_uuid = getattr(entry, "uuid", "")
+        if entry_uuid:
+            uuid_to_entry.setdefault(entry_uuid, entry)
+
     # Track which sessions have had headers added
     seen_sessions: set[str] = set()
     # Track current effective render session (for branch assignment)
@@ -3855,6 +3823,7 @@ def _render_messages(
                     session_hierarchy,
                     session_summaries,
                     session_team_names,
+                    uuid_to_entry,
                     ctx,
                 )
                 branch_header = TemplateMessage(branch_header_content)
