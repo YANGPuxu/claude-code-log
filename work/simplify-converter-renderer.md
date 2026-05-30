@@ -24,19 +24,29 @@
 | §7 — detail-visibility-method | `detail-visibility-method` | [#181](https://github.com/daaain/claude-code-log/pull/181) | ✅ merged |
 | 1 — pagination-token-dedup | `pagination-token-dedup` | [#182](https://github.com/daaain/claude-code-log/pull/182) | ✅ merged |
 | 6 — factor-session-headers | `factor-session-headers` | [#183](https://github.com/daaain/claude-code-log/pull/183) | ✅ merged |
-| 7 — branch-label-source | `branch-label-source` | [#184](https://github.com/daaain/claude-code-log/pull/184) | rebased onto main (`3123b46`), monk ✅, CI green (11/11), CodeRabbit clean (no actionable comments) — **ready to merge** |
-| 8–12 — Wave C / D | — | — | ⏳ not started |
+| 7 — branch-label-source | `branch-label-source` | [#184](https://github.com/daaain/claude-code-log/pull/184) | ✅ merged |
+| 8 — reuse-summary-extractors (C8) | `reuse-summary-extractors` | _pending_ | 🔄 in progress (alice) — byte-identical, base main |
+| 9a — session-scan-characterization | `session-scan-characterization` | _pending_ | ⏳ queued — char tests pinning current behavior, base C8 |
+| 9b — session-scan-core (C9) | `session-scan-core` | _pending_ | ⏳ queued — consolidation, base C9a |
+| 10 — shared-prepare-pipeline | — | — | ❌ dropped — opp 5 already removed the passes it would extract |
+| 11–12 — Wave D | — | — | ⏳ not started (D11 unblocked by opp 6; D12 gated on ghosting epic) |
+
+> **Wave C maintainer decisions (locked, bake into C9b + call out in its PR):**
+> **D1 = count un-keyed token usage** (cache path stops zeroing assistant `usage`
+> with no `requestId`, matching opp 1's fallback; ~nil real impact — 1/2490 fixtures,
+> synthetic). **D2 = count `PassthroughTranscriptEntry`** in `message_count` (cache
+> behavior; fallback changes to match — preserves the staleness key, no cache churn).
 
 > The CI/CodeRabbit trigger mechanics for stacked PRs (retarget-then-force-push
 > order; why CodeRabbit needs an explicit `@coderabbitai full review` even at
 > base=`main`) are operational GitHub notes, out of scope for this plan.
 
-**Current track (sequential): opp 1 (#182) and opp 6 (#183) MERGED; opp 7 (#184)
-rebased onto `main`, awaiting its explicit CodeRabbit review + final merge.** opp 1
-lived in `converter.py`; opp 6/7 in `renderer.py` and overlap the branch-header
-block, so 7 followed 6. Branches were stacked (each PR based on the previous) for
-clean atomic diffs; each was rebased onto `main` and re-checked as its parent
-merged.
+**Current track: Wave A + B fully merged (#175–#178, #181–#184). Wave C in progress**
+— C8 → C9a → C9b, stacked in `converter.py` (session-metadata consolidation). C10
+dropped (obsoleted by opp 5). C9 is split: characterization tests (C9a) land before
+the consolidation (C9b), so the two locked behavior changes surface as reviewable
+test diffs. Branches are stacked (each PR based on the previous) for clean atomic
+diffs and progressive merge.
 
 ## 1. Executive summary
 
