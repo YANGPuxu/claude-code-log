@@ -171,7 +171,8 @@ release-prep version_or_bump:
     fi
 
     echo "📝 Updating version in pyproject.toml to $VERSION"
-    sed -i '' "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
+    tmp=$(mktemp)
+    sed "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml > "$tmp" && mv "$tmp" pyproject.toml
 
     echo "🔄 Running uv sync to update lock file"
     uv sync

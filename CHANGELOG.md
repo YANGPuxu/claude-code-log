@@ -6,6 +6,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.4.0] - 2026-06-03
+
+### Changed
+
+- **Fix sed**
+- **Add MkDocs documentation site with live TUI reference (#197)**
+- **Relax Textual constraint from `==` to `>=` (#196)**
+- **Add `--version` flag to the CLI (#195)**
+- **Fix AskUserQuestion result rendering + highlight chosen options (#180) (#189)**
+- **Derive render_session_id from the SessionTree, not a loop variable (#190)**
+- **Fix collapsible body overlapping preceding content in tool cards (#153) (#187)**
+- **Extract compute_session_data + compute_project_aggregates (C9b) (#188)**
+- **Add C9a characterization tests for session-scan call sites (#186)**
+- **Route converter summary + ai-title extraction through shared helpers (#185)**
+- **status: Wave B fully merged; Wave C kickoff (C8/C9a/C9b stacked, C10 dropped, decisions locked)**
+- **Compute branch preview once from the DAG-line (#184)**
+- **status: #184 fully validated (CI 11/11, CodeRabbit clean) — ready to merge**
+- **docs: keep simplification status note self-contained to project scope**
+- **status: correct #184 state; move GitHub CI/CodeRabbit ops to github guideline**
+- **status: reverse-order stacked-PR lift recipe CONFIRMED on #184**
+- **Factor session-header construction out of _render_messages (#183)**
+- **status: #183/#184 rebased + CodeRabbit forced (#183 clean, #184 2 doc fixes); record @coderabbitai + reverse-order workarounds**
+- **Dedup requestId tokens in pagination cache-miss fallback (#182)**
+- **status: Wave B track complete — opp 7 PR #184 up, all monk-approved; add merge sequence**
+- **status: note stacked-PR CI/CodeRabbit defers to merge-time**
+- **status: opp 1 green (#182, awaiting merge); opp 6 #183 in review; opp 7 in progress**
+- **status: opp 1 -> PR #182 (in review); opp 6 in progress**
+- **Add live-status section to simplification plan**
+- **Add converter/renderer simplification plan**
+- **Move detail-visibility predicate onto MessageContent (#181)**
+- **Sync rendering-architecture.md §5 with the current pipeline (#178)**
+- **Extract inline junction-forward-link block into a named pass (#177)**
+- **Co-locate the away-summary detail rule on AwaySummaryMessage (#176)**
+- **Remove vestigial progress-chain parent repair (#175)**
+- **plugins: dev-docs gaps + public helper API + ToolResult example (Phase 2) (#173)**
+- **Implement unified plugin system from RFC #166 (#169)**
+- **Render Read tool results with pygments via structured payload (closes #170) (#172)**
+- **work/: triage against shipped main (#171)**
+- **Always regenerate projects index so variant-flag toggles refresh links (#168)**
+- **RFC: plugin system (unified message-transformer mechanism) (#166)**
+- **Per-message timestamps in Markdown output (#160) (#165)**
+- **Support non-GitHub forges via static map + `--git-link` fallback (#156) (#164)**
+- **Obsidian-friendly output: --output dir + --expand-paths + --filter-path (#151) (#155)**
+- **Linkify commit SHAs in rendered Markdown + HTML — closes #156 (#161)**
+- **CSS clean-ups (issue #153) (#163)**
+- **Cross-link TaskOutput / TaskUpdate headers back to their spawn (#154) (#158)**
+
+
 ## [1.3.0] - 2026-05-14
 
 ### Changed
