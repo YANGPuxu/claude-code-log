@@ -1,0 +1,87 @@
+site_name: Claude Code Log
+site_description: Convert Claude Code transcript JSONL files to readable HTML and Markdown
+site_url: https://daaain.github.io/claude-code-log/
+repo_url: https://github.com/daaain/claude-code-log
+repo_name: daaain/claude-code-log
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+
+theme:
+  name: material
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.instant
+    - navigation.tracking
+    - content.code.copy
+    - content.action.edit
+    - search.suggest
+    - search.highlight
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+plugins:
+  - search
+  - gen-files:
+      scripts:
+        - docs/gen_pages.py
+
+hooks:
+  - docs/hooks.py
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
+  - mkdocs-click
+
+nav:
+  - Home: index.md
+  - Example output: example.md
+  - User Guide:
+      - Restoring archived sessions: restoring-archived-sessions.md
+  - Reference:
+      - CLI: reference/cli.md
+      - TUI: reference/tui.md
+  - Development:
+      - Application model: development/application_model.md
+      - Rendering architecture: development/rendering-architecture.md
+      - Messages: development/messages.md
+      - Message hierarchy: development/message-hierarchy.md
+      - DAG: development/dag.md
+      - Agents: development/agents.md
+      - Teammates: development/teammates.md
+      - CSS classes: development/css-classes.md
+      - Implementing a tool renderer: development/implementing-a-tool-renderer.md
+      - Plugins: development/plugins.md
+  - Contributing: contributing.md
+  - Changelog: changelog.md

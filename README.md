@@ -16,7 +16,7 @@ TUI demo:
 
 This tool generates clean, minimalist HTML pages showing user prompts and assistant responses chronologically. It's designed to create a readable log of your Claude Code interactions with support for both individual files and entire project hierarchies.
 
-📄 **[View Example HTML Output](https://github.com/daaain/claude-code-log/releases/latest/download/claude-code-log-transcript.html)** - Download a real example generated from this project's development (large file, ~100 MB)
+📄 **[View Example HTML Output](https://daaain.github.io/claude-code-log/example/)** - A real example generated from a sample of this project's development, regenerated on every docs build
 
 ## Quickstart
 

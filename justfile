@@ -77,6 +77,18 @@ ty:
 
 ci: format test-all lint typecheck ty
 
+# Regenerate the auto-generated TUI docs assets (screenshots) into docs/assets/tui
+docs-gen:
+    uv run python scripts/generate_tui_screenshots.py docs/assets/tui
+
+# Serve the documentation site locally with live reload (http://127.0.0.1:8000)
+docs-serve:
+    DISABLE_MKDOCS_2_WARNING=true uv run mkdocs serve
+
+# Build the documentation site (strict: fails on broken links/nav)
+docs-build:
+    DISABLE_MKDOCS_2_WARNING=true uv run mkdocs build --strict
+
 build:
     -rm dist/*
     uv build
@@ -159,7 +171,8 @@ release-prep version_or_bump:
     fi
 
     echo "📝 Updating version in pyproject.toml to $VERSION"
-    sed -i '' "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
+    tmp=$(mktemp)
+    sed "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml > "$tmp" && mv "$tmp" pyproject.toml
 
     echo "🔄 Running uv sync to update lock file"
     uv sync
@@ -324,12 +337,8 @@ github-release version="":
             echo "📦 Uploading wheel distribution"
             gh release upload "$TARGET_TAG" "dist/claude_code_log-${TARGET_TAG#v}-py3-none-any.whl" --clobber
         fi
-
-        # Upload example HTML file if it exists
-        if [[ -f "docs/claude-code-log-transcript.html" ]]; then
-            echo "📄 Uploading example HTML transcript"
-            gh release upload "$TARGET_TAG" "docs/claude-code-log-transcript.html" --clobber
-        fi
+        # The example transcript showcase is published to the docs site
+        # (see docs/gen_pages.py), not attached to releases.
     fi
 
     rm "$RELEASE_NOTES_FILE"
@@ -378,9 +387,11 @@ release-preview version="":
         found && started { print }
     ' CHANGELOG.md
 
-copy-example:
-    rsync ~/.claude/projects/-Users-dain-workspace-claude-code-log/combined_transcripts.html ./docs/claude-code-log-transcript.html
-    rsync -a ~/.claude/projects/-Users-dain-workspace-claude-code-log/cache ./docs/
+# Render the showcase example transcript from bundled sample data into
+# test_output/ for local preview. The docs build publishes its own copy to the
+# site via docs/gen_pages.py, so this is only for quick standalone inspection.
+example:
+    uv run python scripts/generate_example_output.py
 
 backup:
     rsync -a ~/.claude/projects ~/.claude-backup/projects
@@ -389,4 +400,4 @@ clear-cache:
     just cli --clear-cache
     just cli --clear-html
 
-regen-all: backup render-test-data style-guide cli copy-example
+regen-all: backup render-test-data style-guide cli example

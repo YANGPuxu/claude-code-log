@@ -206,6 +206,47 @@ kill -USR1 $(pgrep -f claude-code-log | head -1)
 
 The handler is installed in `cli.py` via `faulthandler.register(SIGUSR1)`. POSIX-only; no-op on Windows. Unlike `py-spy`, it needs no root and no extra install.
 
+## Documentation Site
+
+The project publishes a documentation site to GitHub Pages, built with
+[MkDocs](https://www.mkdocs.org/) and the
+[Material](https://squidfunk.github.io/mkdocs-material/) theme. The site
+configuration is `mkdocs.yml`; pages live under `docs/`.
+
+```bash
+# Install docs dependencies
+uv sync --group docs
+
+# Live-reload preview at http://127.0.0.1:8000
+just docs-serve
+
+# Strict build (fails on broken links/nav — same as CI)
+just docs-build
+```
+
+Key points:
+
+- **CLI reference** (`docs/reference/cli.md`) is rendered live from the Click
+  command via the `mkdocs-click` plugin — no manual upkeep.
+- **TUI reference** (`reference/tui.md`) is generated at build time by
+  `docs/gen_pages.py` (a `mkdocs-gen-files` script): it introspects the Textual
+  `BINDINGS` for the keybindings tables (`scripts/generate_tui_docs.py`) and
+  captures SVG screenshots of the running TUI
+  (`scripts/generate_tui_screenshots.py`). Both scripts are runnable standalone.
+- **Example output** (`example.md` + `examples/transcript.html`) is rendered at
+  build time from a bundled sample project
+  (`scripts/generate_example_output.py`, also `just example`) — no private data
+  or release asset involved. Generation is fault-tolerant so a render hiccup
+  can't block the build.
+- **Development** section surfaces `dev-docs/` (symlinked as `docs/development`).
+  `CONTRIBUTING.md` and `CHANGELOG.md` are symlinked in as `docs/contributing.md`
+  and `docs/changelog.md`. A build hook (`docs/hooks.py`) rewrites links to repo
+  source files (e.g. `../claude_code_log/cli.py`) into GitHub URLs so the strict
+  build stays green.
+- Deployment is automated by `.github/workflows/docs.yml`: PRs run a strict
+  build; pushes to `main` deploy to Pages. The repo's **Settings → Pages →
+  Source** must be set to **GitHub Actions** (one-time).
+
 ## Architecture
 
 Start with [dev-docs/application_model.md](dev-docs/application_model.md)

@@ -111,6 +111,12 @@ with pointers to the deep-dive docs:
 
 User-facing docs live in [docs/](docs/); plans and TODOs live in [work/](work/).
 
+A documentation site (MkDocs + Material) is published to GitHub Pages from
+`docs/` + `mkdocs.yml`. The CLI reference is rendered live from Click, and the
+TUI reference (keybindings + screenshots) is auto-generated at build time. See
+the "Documentation Site" section of @CONTRIBUTING.md. Preview with
+`just docs-serve`; strict build with `just docs-build`.
+
 ### Keeping dev-docs/ in sync
 
 `dev-docs/` is **as-built reference** — the code is the authoritative
