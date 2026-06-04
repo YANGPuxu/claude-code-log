@@ -196,3 +196,7 @@ test/test_data/real_projects/*/*.html
 test/test_data/real_projects/index.html
 # SQLite cache the CLI drops into a projects dir when run against test data
 claude-code-log-cache.db
+
+# Local development output directories
+session/
+output/
