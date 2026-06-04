@@ -200,3 +200,4 @@ claude-code-log-cache.db
 # Local development output directories
 session/
 output/
+/extraction
