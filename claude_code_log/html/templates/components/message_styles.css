@@ -791,7 +791,7 @@ div.system-hook .header {
 /* Branch headers (within-session forks) — indent set via inline
    style based on tree depth (margin-left: depth*2em). */
 .branch-header {
-    background-color: transparent;
+    background-color: #ffffff99;
     box-shadow: none;
     border: none;
     border-left: 3px solid var(--branch-point-color);

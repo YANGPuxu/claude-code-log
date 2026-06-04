@@ -6,28 +6,28 @@
     --code-bg-color: #f5f1e8;
     --tool-param-sep-color: #4b494822;
 
-    /* Dimmed/transparent variants (66 = ~40% opacity) */
-    --white-dimmed: #ffffff66;
-    --highlight-dimmed: #e3f2fd66;
-    --assistant-dimmed: #9c27b066;
-    --info-dimmed: #2196f366;
-    --warning-dimmed: #d9810066;
-    --success-dimmed: #4caf5066;
-    --error-dimmed: #f4433666;
-    --neutral-dimmed: #f8f9fa66;
-    --tool-input-dimmed: #fff3cd66;
-    --thinking-dimmed: #f0f0f066;
-    --tool-result-dimmed: #e8f5e866;
-    --session-bg-dimmed: #e8f4fd66;
-    --ide-notification-dimmed: #d2d6d966;
+    /* Dimmed/transparent variants (cc = ~80% opacity) */
+    --white-dimmed: #ffffffcc;
+    --highlight-dimmed: #e3f2fdcc;
+    --assistant-dimmed: #9c27b0cc;
+    --info-dimmed: #2196f3cc;
+    --warning-dimmed: #d98100cc;
+    --success-dimmed: #4caf50cc;
+    --error-dimmed: #f44336cc;
+    --neutral-dimmed: #f8f9facc;
+    --tool-input-dimmed: #fff3cdcc;
+    --thinking-dimmed: #f0f0f0cc;
+    --tool-result-dimmed: #e8f5e8cc;
+    --session-bg-dimmed: #e8f4fdcc;
+    --ide-notification-dimmed: #d2d6d9cc;
 
-    /* Fully transparent variants (88 = ~53% opacity) */
-    --highlight-semi: #e3f2fd88;
-    --error-semi: #ffebee88;
-    --neutral-semi: #f8f9fa88;
+    /* Semi-transparent variants (cc = ~80% opacity) */
+    --highlight-semi: #e3f2fdcc;
+    --error-semi: #ffebeecc;
+    --neutral-semi: #f8f9facc;
 
-    /* Slightly transparent variants (55 = ~33% opacity) */
-    --highlight-light: #e3f2fd55;
+    /* Slightly transparent variants (cc = ~80% opacity) */
+    --highlight-light: #e3f2fdcc;
 
     /* Solid colors for message types */
     --user-color: #ff9800;
@@ -77,7 +77,7 @@
     --border-separator: #f0f3f6;
 
     /* Background colors */
-    --bg-card: #ffffff66;
+    --bg-card: #ffffffcc;
     --bg-hover: #f8f9fa;
     --bg-neutral: #f8f9fa;
 
@@ -95,15 +95,22 @@ body {
     max-width: 1200px;
     margin: 0 auto;
     padding: 10px;
-    background: linear-gradient(90deg, #f3d6d2, #f1dcce, #f0e4ca, #eeecc7, #e3ecc3, #d5eac0, #c6e8bd, #b9e6bc, #b6e3c5, #b3e1cf);
+    background: linear-gradient(135deg, #7dd3fc 0%, #a5b4fc 30%, #c4b5fd 60%, #e9d5ff 100%);
+    background-attachment: fixed;
     color: var(--text-primary);
 }
 
 h1 {
     text-align: center;
-    color: #2c3e50;
+    color: #ffffff;
     margin-bottom: 20px;
     font-size: 1.8em;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+h1#title {
+    text-align: center;
+    color: #ffffff;
 }
 
 /* Common typography */
@@ -135,12 +142,12 @@ pre {
 
 /* Common card styling */
 .card-base {
-    background-color: #ffffff66;
-    border-radius: 8px;
+    background-color: #ffffffcc;
+    border-radius: 20px;
     padding: 16px;
     box-shadow: -7px -7px 10px #eeeeee44, 7px 7px 10px #00000011;
-    border-left: #ffffff66 1px solid;
-    border-top: #ffffff66 1px solid;
+    border-left: #ffffffcc 1px solid;
+    border-top: #ffffffcc 1px solid;
     border-bottom: #00000017 1px solid;
     border-right: #00000017 1px solid;
 }

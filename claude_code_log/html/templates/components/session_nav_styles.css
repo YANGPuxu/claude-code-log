@@ -131,6 +131,7 @@ a.session-backlink:hover {
     padding: 8px 14px;
     font-size: 0.85em;
     color: var(--text-muted, #6c757d);
+    background-color: #ffffff99;
     border-left: 3px solid var(--fork-point-color);
     border-radius: 8px;
 }
