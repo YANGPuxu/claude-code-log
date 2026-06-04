@@ -1425,10 +1425,19 @@ def prepare_session_navigation(
     # A CompactedSummaryMessage marks the point where `/compact` was run and
     # pre-compaction context was replaced with a summary — a real content
     # discontinuity that's useful to jump to.
+    # Subagent compaction messages need special handling: their transcript
+    # sessionId is the parent session ID, but they should be grouped under
+    # the synthetic agent session ID ({parent}#agent-{agentId}) for correct
+    # navigation hierarchy.
     compact_by_session: dict[str, list[TemplateMessage]] = {}
     for msg in ctx.messages:
         if isinstance(msg.content, CompactedSummaryMessage):
-            compact_by_session.setdefault(msg.render_session_id, []).append(msg)
+            # For subagent compaction messages, construct the synthetic session ID
+            if msg.meta.agent_id:
+                synthetic_sid = f"{msg.meta.session_id}#agent-{msg.meta.agent_id}"
+                compact_by_session.setdefault(synthetic_sid, []).append(msg)
+            else:
+                compact_by_session.setdefault(msg.meta.session_id, []).append(msg)
 
     # Build a uuid → TemplateMessage lookup so each compaction landmark
     # can read preTokens / trigger from its preceding system entry.
@@ -2104,6 +2113,12 @@ def _get_message_hierarchy_level(msg: TemplateMessage) -> int:
 
     # Sidechain assistant/thinking at level 4 (nested under Task tool result)
     if is_sidechain and msg_type in ("assistant", "thinking"):
+        return 4
+
+    # Sidechain system messages (including compaction) at level 4
+    # Compaction messages from subagents need to nest under the Task tool result
+    # just like other sidechain content.
+    if is_sidechain and msg_type == "system":
         return 4
 
     # Sidechain tools at level 5
