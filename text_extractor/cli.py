@@ -48,9 +48,13 @@ def extract(jsonl_path: Path, output: Path, config: Path | None) -> None:
     # Parse the main session
     session = parse_session(jsonl_path)
 
+    # Create a subdirectory for this session
+    session_output_dir = output / session.session_id
+    session_output_dir.mkdir(parents=True, exist_ok=True)
+
     # Process main session
     main_result = process_session(session, cfg)
-    main_output_path = output / f"{session.session_id}.json"
+    main_output_path = session_output_dir / f"{session.session_id}.json"
     write_result(main_result, main_output_path)
     click.echo(f"Main session: {jsonl_path.stat().st_size / 1024:.1f}KB -> {main_result['statistics']['filtered_size_kb']:.1f}KB")
 
@@ -60,11 +64,11 @@ def extract(jsonl_path: Path, output: Path, config: Path | None) -> None:
         if not cfg.subagent.filter_by_type or subagent.agent_type in cfg.subagent.filter_by_type:
             subagent_session = parse_subagent(subagent)
             subagent_result = process_session(subagent_session, cfg)
-            subagent_output_path = output / f"{subagent_session.session_id}.json"
+            subagent_output_path = session_output_dir / f"{subagent_session.session_id}.json"
             write_result(subagent_result, subagent_output_path)
             click.echo(f"  Subagent {subagent.agent_type}: {subagent.jsonl_path.stat().st_size / 1024:.1f}KB -> {subagent_result['statistics']['filtered_size_kb']:.1f}KB")
 
-    click.echo(f"\nOutput written to: {output}/")
+    click.echo(f"\nOutput written to: {session_output_dir}/")
 
 
 @cli.command()
