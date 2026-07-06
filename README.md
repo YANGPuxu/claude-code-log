@@ -113,7 +113,18 @@ claude-code-log --from-date "last week"
 
 # Skip individual session files (only create combined transcripts)
 claude-code-log --no-individual-sessions
+
+# Proceed without subagent context when subagent files are missing/archived
+claude-code-log --no-subagent
 ```
+
+> **Warning:** By default, claude-code-log **refuses to convert** if it detects
+> that subagent JSONL files referenced by the main session are missing. This is
+> because most Claude Code sessions spawn subagents (via `Agent` / `Task` tools)
+> and the full conversation context is lost without them. If you intentionally
+> want to convert a session without subagent context (e.g. archived sessions
+> where subagent files were cleaned up), pass `--no-subagent` to suppress the
+> error and proceed with the main session only.
 
 This creates:
 

@@ -13,6 +13,7 @@ import click
 from git import Repo, InvalidGitRepositoryError
 
 from .converter import (
+    SubagentNotFoundError,
     convert_jsonl_to,
     convert_jsonl_to_html,
     ensure_fresh_cache,
@@ -706,6 +707,14 @@ def _validate_git_link_template(template: str) -> None:
     ),
 )
 @click.option(
+    "--no-subagent",
+    is_flag=True,
+    default=False,
+    help="Proceed without subagent context even if subagent files are missing. "
+    "By default, claude-code-log refuses to convert when referenced subagent "
+    "files cannot be found, since subagent context is essential for most sessions.",
+)
+@click.option(
     "--debug",
     is_flag=True,
     default=False,
@@ -735,6 +744,7 @@ def main(
     compact: bool,
     git_link: Optional[str],
     no_timestamps: bool,
+    no_subagent: bool,
     debug: bool,
 ) -> None:
     """Convert Claude transcript JSONL files to HTML or Markdown.
@@ -1004,6 +1014,7 @@ def main(
                 detail=detail_level,
                 compact=compact,
                 no_timestamps=no_timestamps,
+                no_subagent=no_subagent,
             )
             click.echo(f"Successfully exported session to {output_path}")
             if open_browser:
@@ -1064,6 +1075,7 @@ def main(
                 filter_path=filter_path,
                 write_combined=write_combined,
                 no_timestamps=no_timestamps,
+                no_subagent=no_subagent,
             )
 
             # Count processed projects
@@ -1123,6 +1135,7 @@ def main(
             update_cache=output is None,
             write_combined=write_combined,
             no_timestamps=no_timestamps,
+            no_subagent=no_subagent,
         )
         if input_path.is_file():
             click.echo(f"Successfully converted {input_path} to {output_path}")
@@ -1143,6 +1156,13 @@ def main(
             click.launch(str(output_path))
 
     except FileNotFoundError as e:
+        click.echo(f"Error: {e}", err=True)
+        if debug:
+            import traceback
+
+            traceback.print_exc()
+        sys.exit(1)
+    except SubagentNotFoundError as e:
         click.echo(f"Error: {e}", err=True)
         if debug:
             import traceback

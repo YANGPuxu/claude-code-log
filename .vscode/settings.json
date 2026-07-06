@@ -7,5 +7,6 @@
     },
     "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
     "python-envs.defaultEnvManager": "ms-python.python:venv",
-    "python-envs.pythonProjects": []
+    "python-envs.pythonProjects": [],
+    "window.title": "Claude Code Log"
 }

@@ -32,6 +32,11 @@ from .cache import (
     get_library_version,
 )
 from .parser import parse_timestamp
+
+
+class SubagentNotFoundError(Exception):
+    """Raised when referenced subagent JSONL files cannot be found."""
+    pass
 from .factories import create_transcript_entry
 from .factories.teammate_factory import find_team_lead_body
 from .models import (
@@ -221,6 +226,7 @@ def load_transcript(
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
     silent: bool = False,
+    no_subagent: bool = False,
     _loaded_files: Optional[set[Path]] = None,
 ) -> list[TranscriptEntry]:
     """Load and parse JSONL transcript file, using cache if available.
@@ -401,6 +407,15 @@ def load_transcript(
                 )
                 if subagent_file.exists():
                     agent_file = subagent_file
+            # Try flat subagents directory (session file and subagents/ are siblings)
+            if not agent_file.exists():
+                subagent_file = (
+                    parent_dir
+                    / "subagents"
+                    / f"agent-{agent_id}.jsonl"
+                )
+                if subagent_file.exists():
+                    agent_file = subagent_file
             if agent_file.exists():
                 if not silent:
                     print(f"Loading agent file {agent_file}...")
@@ -411,9 +426,21 @@ def load_transcript(
                     from_date,
                     to_date,
                     silent=True,
+                    no_subagent=True,
                     _loaded_files=_loaded_files,
                 )
                 agent_messages_map[agent_id] = agent_messages
+
+    # Check for unresolved subagents after loading attempts
+    if agent_ids and not no_subagent:
+        unresolved = agent_ids - set(agent_messages_map.keys())
+        if unresolved:
+            raise SubagentNotFoundError(
+                f"Subagent file(s) not found for referenced agent(s): "
+                f"{', '.join(sorted(unresolved))}\n"
+                f"Session: {jsonl_path}\n"
+                f"Use --no-subagent to proceed without subagent context."
+            )
 
     # Insert agent messages at their point of use (only once per agent)
     if agent_messages_map:
@@ -469,7 +496,10 @@ def _link_subagents_by_prompt_hash(
 
     subagents_dir = jsonl_path.parent / jsonl_path.stem / "subagents"
     if not subagents_dir.is_dir():
-        return
+        # Try flat subagents directory (session file and subagents/ are siblings)
+        subagents_dir = jsonl_path.parent / "subagents"
+        if not subagents_dir.is_dir():
+            return
 
     # Pre-normalize prompts once, and track which result entries are still
     # up for grabs. Without this a second agent file with the same
@@ -659,6 +689,7 @@ def load_directory_transcripts(
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
     silent: bool = False,
+    no_subagent: bool = False,
 ) -> tuple[list[TranscriptEntry], SessionTree]:
     """Load all JSONL transcript files from a directory and combine them.
 
@@ -675,7 +706,7 @@ def load_directory_transcripts(
 
     for jsonl_file in jsonl_files:
         messages = load_transcript(
-            jsonl_file, cache_manager, from_date, to_date, silent
+            jsonl_file, cache_manager, from_date, to_date, silent, no_subagent=no_subagent
         )
         all_messages.extend(messages)
 
@@ -1484,6 +1515,7 @@ def convert_jsonl_to_html(
     use_cache: bool = True,
     silent: bool = False,
     page_size: int = 2000,
+    no_subagent: bool = False,
 ) -> Path:
     """Convert JSONL transcript(s) to HTML file(s).
 
@@ -1499,6 +1531,7 @@ def convert_jsonl_to_html(
         use_cache,
         silent,
         page_size=page_size,
+        no_subagent=no_subagent,
     )
 
 
@@ -1519,6 +1552,7 @@ def convert_jsonl_to(
     output_root: Optional[Path] = None,
     write_combined: bool = True,
     no_timestamps: bool = False,
+    no_subagent: bool = False,
 ) -> Path:
     """Convert JSONL transcript(s) to the specified format.
 
@@ -1570,7 +1604,7 @@ def convert_jsonl_to(
         # Single file mode - cache only available for directory mode
         if output_path is None:
             output_path = input_path.with_suffix(f"{suffix}.{ext}")
-        messages = load_transcript(input_path, silent=silent)
+        messages = load_transcript(input_path, silent=silent, no_subagent=no_subagent)
         # Parent agent entries and assign synthetic session IDs (same as
         # directory mode) so DAG-based ordering handles sidechain placement.
         _integrate_agent_entries(messages)
@@ -1618,7 +1652,7 @@ def convert_jsonl_to(
 
         # Phase 2: Load messages (will use fresh cache when available)
         messages, session_tree = load_directory_transcripts(
-            input_path, cache_manager, from_date, to_date, silent
+            input_path, cache_manager, from_date, to_date, silent, no_subagent=no_subagent
         )
 
         # Get working directories from cache
@@ -1829,7 +1863,7 @@ def ensure_fresh_cache(
     if not silent:
         print(f"Updating cache for {project_dir.name}...")
     messages, _tree = load_directory_transcripts(
-        project_dir, cache_manager, from_date, to_date, silent
+        project_dir, cache_manager, from_date, to_date, silent, no_subagent=True
     )
 
     # Update cache with fresh data
@@ -2112,6 +2146,7 @@ def generate_single_session_file(
     detail: DetailLevel = DetailLevel.FULL,
     compact: bool = False,
     no_timestamps: bool = False,
+    no_subagent: bool = False,
 ) -> Path:
     """Generate a single session output file for the given session ID.
 
@@ -2147,7 +2182,7 @@ def generate_single_session_file(
     ensure_fresh_cache(input_path, cache_manager, silent=True)
 
     # Load messages from JSONL files
-    messages, _session_tree = load_directory_transcripts(input_path, cache_manager)
+    messages, _session_tree = load_directory_transcripts(input_path, cache_manager, no_subagent=no_subagent)
 
     # Collect all known session IDs: from loaded messages + cache metadata
     all_session_ids: set[str] = {
@@ -2301,6 +2336,7 @@ def process_projects_hierarchy(
     filter_path: Optional[str] = None,
     write_combined: bool = True,
     no_timestamps: bool = False,
+    no_subagent: bool = False,
 ) -> Path:
     """Process the entire ~/.claude/projects/ hierarchy and create linked output files.
 
@@ -2669,7 +2705,7 @@ def process_projects_hierarchy(
                 f"Warning: No cached data available for {project_dir.name}, using fallback processing"
             )
             messages, _tree = load_directory_transcripts(
-                project_dir, cache_manager, from_date, to_date, silent=silent
+                project_dir, cache_manager, from_date, to_date, silent=silent, no_subagent=no_subagent
             )
             # Ensure cache is populated with session data (including working directories)
             if cache_manager:

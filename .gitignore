@@ -201,3 +201,9 @@ claude-code-log-cache.db
 session/
 output/
 /extraction
+
+# IDE
+.vscode/
+
+# Archive
+archive/
